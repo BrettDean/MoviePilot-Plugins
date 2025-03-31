@@ -63,5 +63,17 @@
       "v1.0.1": "抓取到同一个电视剧的多条信息只保留第一条",
       "v1.0.0": "autoSubscribe init"
     }
+  },
+  "mysqlSubscribe": {
+    "name": "mysqlSubscribe",
+    "description": "autoSubscribe的mysql版本，自用",
+    "labels": "mysqlSubscribe",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/mysqlsubscribe.png",
+    "author": "Dean",
+    "level": 1,
+    "history": {
+      "v1.0.0": "mysqlSubscribe init"
+    }
   }
 }
