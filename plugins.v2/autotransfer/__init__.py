@@ -48,7 +48,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.35"
+    plugin_version = "1.0.36"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -448,6 +448,8 @@ class autoTransfer(_PluginBase):
                     min_filesize=int(self._size),
                     recursive=True,
                 )
+                # 去除 .parts 文件
+                list_files = [f for f in list_files if not str(f).endswith(".parts")]
                 logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频")
                 unique_items = {}
 
