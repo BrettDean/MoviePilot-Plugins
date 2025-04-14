@@ -53,11 +53,12 @@
     "name": "autoSubscribe",
     "description": "通过网页获取爱优腾的最新电视剧并订阅",
     "labels": "autoSubscribe",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autosubscribe.png",
     "author": "Dean",
     "level": 1,
     "history": {
+      "v1.0.8": "enhance: 补充ui说明并强制持久化显示",
       "v1.0.7": "fix: 添加滚动次数限制以防止无限循环",
       "v1.0.6": "feat: 添加电视剧获取数量配置项",
       "v1.0.5": "fix: 爱奇艺经常加载不出 增加随机延迟",
@@ -70,7 +71,7 @@
   },
   "mysqlSubscribe": {
     "name": "mysqlSubscribe",
-    "description": "autoSubscribe的mysql版本，自用",
+    "description": "autoSubscribe的mysql版本，自用，还没开始做",
     "labels": "mysqlSubscribe",
     "version": "1.0.0",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/mysqlsubscribe.png",

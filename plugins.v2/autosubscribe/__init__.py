@@ -40,7 +40,7 @@ class autoSubscribe(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autosubscribe.png"
     # 插件版本
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -299,7 +299,7 @@ class autoSubscribe(_PluginBase):
                 # 转换集合为列表并打印结果
                 tv_list = [
                     {"title": title, "status": status, "year": year}
-                    for title, status, year in list(tv_set)[:self._tv_limit]
+                    for title, status, year in list(tv_set)[: self._tv_limit]
                 ]
                 for idx, tv in enumerate(tv_list, start=1):
                     logger.info(
@@ -428,7 +428,7 @@ class autoSubscribe(_PluginBase):
                 # 转换集合为列表并打印结果
                 tv_list = [
                     {"title": title, "status": status, "year": year}
-                    for title, status, year in list(tv_set)[:self._tv_limit]
+                    for title, status, year in list(tv_set)[: self._tv_limit]
                 ]
                 for idx, tv in enumerate(tv_list, start=1):
                     logger.info(
@@ -585,7 +585,7 @@ class autoSubscribe(_PluginBase):
                 # 转换集合为列表并打印结果
                 tv_list = [
                     {"title": title, "status": status, "year": year}
-                    for title, status, year in list(tv_set)[:self._tv_limit]
+                    for title, status, year in list(tv_set)[: self._tv_limit]
                 ]
                 for idx, tv in enumerate(tv_list, start=1):
                     logger.info(
@@ -606,21 +606,20 @@ class autoSubscribe(_PluginBase):
         if len(iqiyi_tv_list) == 0:
             iqiyi_tv_list = self.get_iqiyi_tv_list() or []
         logger.info(f"爱奇艺视频电视剧列表获取完成，共获取到{len(iqiyi_tv_list)}条信息")
-        
+
         # 获取优酷视频电视剧列表
         logger.info("开始获取优酷视频电视剧列表")
         youku_tv_list = self.get_youku_tv_list() or []
         if len(youku_tv_list) == 0:
             youku_tv_list = self.get_youku_tv_list() or []
         logger.info(f"优酷视频电视剧列表获取完成，共获取到{len(youku_tv_list)}条信息")
-        
+
         # 获取腾讯视频电视剧列表
         logger.info("开始获取腾讯视频电视剧列表")
         qq_tv_list = self.get_qq_tv_list() or []
         if len(qq_tv_list) == 0:
             qq_tv_list = self.get_qq_tv_list() or []
         logger.info(f"腾讯视频电视剧列表获取完成，共获取到{len(qq_tv_list)}条信息")
-
 
         # 合并三个列表并根据名字去重，优先保留有年份的
         all_tv_list = []
@@ -987,7 +986,7 @@ class autoSubscribe(_PluginBase):
                                         "props": {
                                             "type": "info",
                                             "variant": "tonal",
-                                            "text": "说明: 插件每天在凌晨0-6点随机时间运行一次，\n分别抓取指定数量个爱优腾的最新电视剧(如设置了100，则总共抓取300个电视剧，建议从10逐步增加到100就差不多了。别一开始直接拉满！一天添加1500个订阅)，\n去重后根据本地媒体库是否存在，更新订阅状态或添加订阅。",
+                                            "text": "说明: 插件在每天凌晨0-6点随机时间运行一次，\n分别抓取指定数量个爱优腾的最新电视剧(如设置了100，则总共抓取300个电视剧，建议从10逐步增加到100就差不多了。别一开始直接拉满！一天添加1500个订阅)，\n去重后根据本地媒体库是否存在，更新订阅状态或添加订阅，总之都会触发搜索下载。",
                                             "style": {
                                                 "white-space": "pre-line",
                                                 "word-wrap": "break-word",
@@ -1033,6 +1032,8 @@ class autoSubscribe(_PluginBase):
                                         "props": {
                                             "model": "enabled",
                                             "label": "启用插件",
+                                            "hint": "开启后将在每天凌晨0-6点随机时间运行一次，",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -1046,6 +1047,8 @@ class autoSubscribe(_PluginBase):
                                         "props": {
                                             "model": "onlyonce",
                                             "label": "立即运行一次",
+                                            "hint": "不论插件是否启动都立即运行一次",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -1064,7 +1067,7 @@ class autoSubscribe(_PluginBase):
                                             "step": 1,
                                             "thumb-label": "always",
                                             "hide-details": "false",
-                                            "style": "width: 350px"
+                                            "style": "width: 350px",
                                         },
                                     }
                                 ],
