@@ -1558,7 +1558,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "onlyonce",
                                                             "label": "立即运行一次",
-                                                            "hint": "不论插件是否启动都立即运行一次",
+                                                            "hint": "不论插件是否启用都立即运行一次",
                                                             "persistent-hint": True,
                                                         },
                                                     }
