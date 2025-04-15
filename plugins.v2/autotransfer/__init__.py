@@ -1791,7 +1791,7 @@ class autoTransfer(_PluginBase):
                                             "model": "interval",
                                             "label": "入库消息延迟(秒)",
                                             "placeholder": "300",
-                                            "hint": "默认0, 单位秒, 只能输入数字",
+                                            "hint": "默认300, 单位秒, 只能输入数字",
                                             "persistent-hint": True,
                                         },
                                     }
