@@ -1870,7 +1870,7 @@ class autoTransfer(_PluginBase):
                                             "model": "downloaderSpeedLimit",
                                             "label": "转移时下载器限速(KiB/s)",
                                             "placeholder": "0或留空不限速",
-                                            "hint": "默认0, 单位KiB/s, 只能输入数字",
+                                            "hint": "默认0, 单位KiB/s, 只能输入数字, 推荐1",
                                             "persistent-hint": True,
                                         },
                                     }
