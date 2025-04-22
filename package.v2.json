@@ -3,11 +3,12 @@
     "name": "autoTransfer",
     "description": "类似v1的目录监控，可定期整理文件",
     "labels": "autoTransfer",
-    "version": "1.0.40",
+    "version": "1.0.41",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png",
     "author": "Dean",
     "level": 1,
     "history": {
+      "v1.0.41": "feat: 1.新增刮削重试 2.新增手动清空插件运行状态数据，方便调试。",
       "v1.0.40": "refactor: 重构下载器限速逻辑并移除预取消限速功能",
       "v1.0.39": "feat: 增加插件运行状态显示",
       "v1.0.38": "enhance: 补充ui说明并强制持久化显示",

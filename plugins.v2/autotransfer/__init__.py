@@ -5,6 +5,7 @@ import re
 import pytz
 import os
 import datetime
+import time
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 from apscheduler.triggers.cron import CronTrigger
@@ -48,7 +49,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.40"
+    plugin_version = "1.0.41"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -76,6 +77,7 @@ class autoTransfer(_PluginBase):
     _scrape = False
     _category = False
     _refresh = False
+    _reset_plunin_data = False
     _softlink = False
     _strm = False
     _del_empty_dir = False
@@ -125,6 +127,7 @@ class autoTransfer(_PluginBase):
             self._scrape = config.get("scrape")
             self._category = config.get("category")
             self._refresh = config.get("refresh")
+            self._reset_plunin_data = config.get("reset_plunin_data")
             self._transfer_type = config.get("transfer_type")
             self._monitor_dirs = config.get("monitor_dirs") or ""
             self._exclude_keywords = config.get("exclude_keywords") or ""
@@ -213,6 +216,12 @@ class autoTransfer(_PluginBase):
                     except Exception as e:
                         logger.debug(str(e))
 
+            # 重置插件运行数据
+            if bool(self._reset_plunin_data):
+                self.__runResetPlunindata()
+                self._reset_plunin_data = False
+                self.__update_config()
+                
             # 运行一次定时服务
             if self._onlyonce:
                 logger.info("立即运行一次")
@@ -253,6 +262,7 @@ class autoTransfer(_PluginBase):
                 "category": self._category,
                 "size": self._size,
                 "refresh": self._refresh,
+                "reset_plunin_data": self._reset_plunin_data,
                 "cron": self._cron,
                 "del_empty_dir": self._del_empty_dir,
                 "pathAfterMoveFailure": self._pathAfterMoveFailure,
@@ -461,6 +471,14 @@ class autoTransfer(_PluginBase):
                 key="plugin_state_time",
                 value=str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
+    def __runResetPlunindata(self):
+        """
+        重置插件数据
+        """
+        self.del_data(key="plugin_state")
+        self.del_data(key="plugin_state_time")
+        self.del_data(key="download_limit_current_val")
+        self.del_data(key="is_download_speed_limited")
 
     def main(self):
         """
@@ -527,12 +545,31 @@ class autoTransfer(_PluginBase):
 
                 # 刮削
                 if self._scrape:
+                    max_retries = 3  # 最大重试次数
                     for transferinfo, mediainfo, file_meta in unique_items.values():
-                        self.mediaChain.scrape_metadata(
-                            fileitem=transferinfo.target_diritem,
-                            meta=file_meta,
-                            mediainfo=mediainfo,
-                        )
+                        retry_count = 1
+                        while retry_count <= max_retries:
+                            try:
+                                logger.info(
+                                    f"开始刮削目录: {transferinfo.target_diritem.path}"
+                                )
+                                self.mediaChain.scrape_metadata(
+                                    fileitem=transferinfo.target_diritem,
+                                    meta=file_meta,
+                                    mediainfo=mediainfo,
+                                )
+                                logger.debug(
+                                    f"刮削目录成功: {transferinfo.target_diritem.path}"
+                                )
+                                break  # 成功后跳出循环
+                            except Exception as e:
+                                logger.warning(
+                                    f"目录第 {retry_count}/{max_retries} 次刮削失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
+                                )
+                                # time.sleep(3 * 60)
+                                time.sleep(3)
+                                retry_count += 1
+                                continue  # 重试
 
             logger.info("目录内所有文件整理完成！")
             self.__update_plugin_state("finished")
@@ -1576,7 +1613,23 @@ class autoTransfer(_PluginBase):
                                             }
                                         ],
                                     },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {
+                                                    "model": "reset_plunin_data",
+                                                    "label": "清空上次运行状态",
+                                                    "hint": "手动清空上次运行状态，一般用不到，是调试插件时，直接停止主函数导致本插件运行状态没有更新才用的",
+                                                    "persistent-hint": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                 ],
+                                
                             },
                             {
                                 "component": "VForm",
@@ -2048,7 +2101,7 @@ class autoTransfer(_PluginBase):
                                         "props": {
                                             "type": "info",
                                             "variant": "tonal",
-                                            "text": "1.入库消息延迟默认300s，如网络较慢可酌情调大，有助于发送统一入库消息。\n2.源目录与目的目录设置一致，则默认使用目录设置配置。否则可在源目录后拼接@覆盖方式（默认never覆盖方式）。\n3.开启软链接/Strm会在监控转移后联动【实时软链接】/【云盘Strm[助手]】插件生成软链接/Strm（只处理媒体文件，不处理刮削文件）。\n4.启用此插件后，可将'设定'-'存储&目录'-'目录'-'自动整理'改为'不整理'或'手动整理'\n5.'转移时下载器限速'只在移动(或复制)时生效，他会在每次移动(或复制)前，限制qb下载速度，转移完成后再恢复限速前的速度\n6.'是否二级分类'与'设定'-'储存&目录'-'媒体库目录'-'按类别分类'开关冲突时，以'设定'中的为准\n7.前3排开关，前2排推荐全部打开，第3排推荐全部关闭\n\n此插件由thsrite的目录监控插件修改而得\n本意是为了做类似v1的定时整理，因我只用本地移动，原地整理，故也不知软/硬链、Strm之类的是否可用",
+                                            "text": "1.入库消息延迟默认300s，如网络较慢可酌情调大，有助于发送统一入库消息。\n2.源目录与目的目录设置一致，则默认使用目录设置配置。否则可在源目录后拼接@覆盖方式（默认never覆盖方式）。\n3.开启软链接/Strm会在监控转移后联动【实时软链接】/【云盘Strm[助手]】插件生成软链接/Strm（只处理媒体文件，不处理刮削文件）。\n4.启用此插件后，可将'设定'-'存储&目录'-'目录'-'自动整理'改为'不整理'或'手动整理'\n5.'转移时下载器限速'只在移动(或复制)时生效，他会在每次移动(或复制)前，限制qb下载速度，转移完成后再恢复限速前的速度\n6.'是否二级分类'与'设定'-'储存&目录'-'媒体库目录'-'按类别分类'开关冲突时，以'设定'中的为准\n7.前3排开关，前2排推荐全部打开，第3排推荐全部关闭\n\n此插件由thsrite的目录监控插件修改而得\n本意是为了做类似v1的定时整理，因我只用本地移动，故也不知软/硬链、Strm之类的是否可用",
                                             "style": {
                                                 "white-space": "pre-line",
                                                 "word-wrap": "break-word",
@@ -2100,6 +2153,7 @@ class autoTransfer(_PluginBase):
             "scrape": False,
             "category": False,
             "refresh": True,
+            "reset_plunin_data": False,
             "softlink": False,
             "strm": False,
             "transfer_type": "move",
