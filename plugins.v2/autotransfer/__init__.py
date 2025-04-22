@@ -776,7 +776,7 @@ class autoTransfer(_PluginBase):
                 # 识别媒体信息
                 mediainfo: MediaInfo = self.chain.recognize_media(meta=file_meta)
                 if not mediainfo:
-                    logger.warn(f"未识别到媒体信息，标题: {file_meta.name}")
+                    logger.warn(f"未识别到媒体信息，路径: {file_item.path}")
                     # 新增转移成功历史记录
                     his = self.transferhis.add_fail(  # noqa: F841
                         fileitem=file_item, mode=transfer_type, meta=file_meta
@@ -784,7 +784,7 @@ class autoTransfer(_PluginBase):
                     if self._notify:
                         self.post_message(
                             mtype=NotificationType.Manual,
-                            title=f"{file_path.name} 未识别到媒体信息，无法入库！\n",
+                            title=f"{file_item.path} 未识别到媒体信息，无法入库！\n",
                         )
                     # 转移失败文件到指定目录
                     if (
@@ -803,7 +803,7 @@ class autoTransfer(_PluginBase):
                     if transfer_history:
                         mediainfo.title = transfer_history.title
                 logger.info(
-                    f"{file_path.name} 识别为: {mediainfo.type.value} {mediainfo.title_year}"
+                    f"{file_item.path} 识别为: {mediainfo.type.value} {mediainfo.title_year}"
                 )
 
                 # 获取集数据
