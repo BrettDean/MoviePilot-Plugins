@@ -3,11 +3,12 @@
     "name": "autoTransfer",
     "description": "类似v1的目录监控，可定期整理文件",
     "labels": "autoTransfer",
-    "version": "1.0.42",
+    "version": "1.0.43",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png",
     "author": "Dean",
     "level": 1,
     "history": {
+      "v1.0.43": "docs: 配置面板显示细节调整",
       "v1.0.42": "refactor: 将媒体库刷新事件的广播逻辑从 单个文件整理完成后 移至 每个监控目录整理完成后。原来的相同路径重复广播，优化为只广播一次。",
       "v1.0.41": "feat: 1.新增刮削重试 2.新增手动清空插件运行状态数据，方便调试。",
       "v1.0.40": "refactor: 重构下载器限速逻辑并移除预取消限速功能",

@@ -49,7 +49,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.42"
+    plugin_version = "1.0.43"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -222,7 +222,7 @@ class autoTransfer(_PluginBase):
                 self._reset_plunin_data = False
                 self.__update_config()
                 logger.info("重置插件运行数据成功")
-                
+
             # 运行一次定时服务
             if self._onlyonce:
                 logger.info("立即运行一次")
@@ -472,6 +472,7 @@ class autoTransfer(_PluginBase):
                 key="plugin_state_time",
                 value=str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
+
     def __runResetPlunindata(self):
         """
         重置插件数据
@@ -1059,7 +1060,6 @@ class autoTransfer(_PluginBase):
                         media_list
                     )
 
-
                 if self._softlink:
                     # 通知实时软链接生成
                     self.eventmanager.send_event(
@@ -1603,7 +1603,7 @@ class autoTransfer(_PluginBase):
                                                 "props": {
                                                     "model": "notify",
                                                     "label": "发送通知",
-                                                    "hint": "整理完成后发送通知",
+                                                    "hint": "整理完成后发送通知，推荐开",
                                                     "persistent-hint": True,
                                                 },
                                             }
@@ -1618,7 +1618,7 @@ class autoTransfer(_PluginBase):
                                                 "props": {
                                                     "model": "refresh",
                                                     "label": "刷新媒体库",
-                                                    "hint": "广播整理完成事件，让插件'媒体库服务器刷新'通知媒体库刷新",
+                                                    "hint": "广播整理完成事件，让插件'媒体库服务器刷新'通知媒体库刷新，推荐开",
                                                     "persistent-hint": True,
                                                 },
                                             }
@@ -1633,14 +1633,13 @@ class autoTransfer(_PluginBase):
                                                 "props": {
                                                     "model": "reset_plunin_data",
                                                     "label": "清空上次运行状态",
-                                                    "hint": "手动清空上次运行状态，一般用不到，是调试插件时，直接停止主函数导致本插件运行状态没有更新才用的",
+                                                    "hint": "手动清空上次运行状态，一般用不到，是调试插件时，直接停止主函数导致本插件运行状态没有更新才用的，推荐关",
                                                     "persistent-hint": True,
                                                 },
                                             }
                                         ],
                                     },
                                 ],
-                                
                             },
                             {
                                 "component": "VForm",
@@ -1657,7 +1656,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "history",
                                                             "label": "存储历史记录",
-                                                            "hint": "开启后会将整理记录储存到'媒体整理'",
+                                                            "hint": "开启后会将整理记录储存到'媒体整理'，推荐开",
                                                             "persistent-hint": True,
                                                         },
                                                     }
@@ -1672,7 +1671,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "scrape",
                                                             "label": "是否刮削",
-                                                            "hint": "每处理完一行监控目录，就刮削一次对应的图片和nfo文件",
+                                                            "hint": "每处理完一行监控目录，就刮削一次对应的图片和nfo文件，推荐开",
                                                             "persistent-hint": True,
                                                         },
                                                     }
@@ -1687,7 +1686,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "category",
                                                             "label": "是否二级分类",
-                                                            "hint": "开与关的区别就是'媒体库'-'电视剧'-'国产剧'-'甄嬛传'和'媒体库'-'电视剧'-'甄嬛传'",
+                                                            "hint": "开与关的区别就是'媒体库'-'电视剧'-'国产剧'-'甄嬛传'和'媒体库'-'电视剧'-'甄嬛传'，推荐开",
                                                             "persistent-hint": True,
                                                         },
                                                     }
@@ -1712,7 +1711,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "del_empty_dir",
                                                             "label": "删除空目录",
-                                                            "hint": "移动完成后删除空目录，推荐关闭，此开关仅在转移方式为移动时有效",
+                                                            "hint": "移动完成后删除空目录，推荐关闭，此开关仅在转移方式为移动时有效，推荐关",
                                                             "persistent-hint": True,
                                                         },
                                                     }
@@ -1753,7 +1752,7 @@ class autoTransfer(_PluginBase):
                                                         "props": {
                                                             "model": "onlyonce",
                                                             "label": "立即运行一次",
-                                                            "hint": "不论插件是否启用都立即运行一次",
+                                                            "hint": "不论插件是否启用都立即运行一次(即手动整理一次)",
                                                             "persistent-hint": True,
                                                         },
                                                     }
@@ -1973,13 +1972,22 @@ class autoTransfer(_PluginBase):
                                                 "props": {
                                                     "model": "monitor_dirs",
                                                     "label": "监控目录",
-                                                    "rows": 7,
-                                                    "auto-grow": "{{ monitor_dirs.length > 0 }}",
-                                                    "placeholder": "每一行一个目录，支持以下几种配置方式，转移方式支持 move、copy、link、softlink、rclone_copy、rclone_move：\n"
-                                                    "监控目录:转移目的目录\n"
-                                                    "监控目录:转移目的目录#转移方式\n"
-                                                    "例如:\n/Downloads/电影/:/Library/电影/\n/Downloads/电视剧/:/Library/电视剧/\n/mnt/手动备份/电影/:/Library/手动备份/电影/#copy",
-                                                    "hint": "如果'监控目录'中的视频在'设定'-'储存&目录'中的'资源目录'或其子目录中，则插件设置的目的目录无效，会自动使用'设定'中的'媒体库目录'",
+                                                    "rows": 10,
+                                                    "auto-grow": True,
+                                                    "placeholder": "转移方式支持 move、copy、link、softlink、rclone_copy、rclone_move\n"
+                                                    "覆盖方式支持: always(总是覆盖同名文件)、size(存在时大覆盖小)、never(存在不覆盖)、latest(仅保留最新版本)\n"
+                                                    "一行一个目录，支持以下几种配置方式:\n"
+                                                    "监控目录:目的目录\n"
+                                                    "监控目录:目的目录#转移方式\n"
+                                                    "监控目录:目的目录#转移方式@覆盖方式\n"
+                                                    "例如:\n"
+                                                    "/Downloads/电影/:/Library/电影/\n"
+                                                    "/Downloads/电视剧/:/Library/电视剧/#copy\n"
+                                                    "/mnt/手动备份/电影/:/Library/手动备份/电影/#move@always",
+                                                    "hint": "①转移方式支持 move、copy、link、softlink、rclone_copy、rclone_move。"
+                                                    "②覆盖方式支持: always(总是覆盖同名文件)、size(存在时大覆盖小)、never(存在不覆盖)、latest(仅保留最新版本)。"
+                                                    "③例: /mnt/手动备份/电影/:/Library/手动备份/电影/#move@always   其中#move和@always可省略，通过插件上方统一配置。"
+                                                    "④如果'监控目录'中的视频在'设定'-'储存&目录'中的'资源目录中'或其子目录中，则插件这边的对应设置无效，会优先使用'设定'中的配置。",
                                                     "persistent-hint": True,
                                                 },
                                             }
@@ -2004,7 +2012,7 @@ class autoTransfer(_PluginBase):
                                             "model": "exclude_keywords",
                                             "label": "排除关键词",
                                             "rows": 1,
-                                            "auto-grow": "{{ monitor_dirs.length > 0 }}",
+                                            "auto-grow": True,
                                             "placeholder": "正则, 区分大小写, 一行一个正则表达式",
                                             "hint": "正则, 区分大小写, 一行一个正则表达式",
                                             "persistent-hint": True,
@@ -2080,9 +2088,7 @@ class autoTransfer(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {
-                                    "cols": 12,
-                                },
+                                "props": {"cols": 12},
                                 "content": [
                                     {
                                         "component": "VTextarea",
@@ -2090,10 +2096,10 @@ class autoTransfer(_PluginBase):
                                             "model": "pathAfterMoveFailure",
                                             "label": "移动到的路径",
                                             "rows": 1,
-                                            "auto-grow": "{{ monitor_dirs.length > 0 }}",
                                             "placeholder": "如 /mnt/failed",
                                             "hint": "移动方式，当整理失败或命中关键词后，将文件移动到此路径(会根据失败原因和原目录结构将文件移动到此处)，只能有一个路径，留空或'转移方式'不是'移动'或不满足上面两个开关的条件均不会移动。",
                                             "persistent-hint": True,
+                                            "auto-grow": True,
                                         },
                                     }
                                 ],
