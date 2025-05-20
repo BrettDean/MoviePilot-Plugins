@@ -706,11 +706,9 @@ class autoTransfer(_PluginBase):
                 from app.db import ScopedSession
                 from sqlalchemy import Column, Integer, String, Text
                 from sqlalchemy.ext.declarative import declarative_base
-                from app.db import ScopedSession
                 import json
 
                 Base = declarative_base()
-                db = ScopedSession()
 
                 class SystemConfig(Base):
                     __tablename__ = "systemconfig"
@@ -719,12 +717,16 @@ class autoTransfer(_PluginBase):
                     key = Column(String(255), nullable=False)
                     value = Column(Text, nullable=True)
 
-                # 查询 key = "MediaServers" 的记录
-                record = (
-                    db.query(SystemConfig)
-                    .filter(SystemConfig.key == "MediaServers")
-                    .first()
-                )
+                try:
+                    db = ScopedSession()
+                    # 查询 key = "MediaServers" 的记录
+                    record = (
+                        db.query(SystemConfig)
+                        .filter(SystemConfig.key == "MediaServers")
+                        .first()
+                    )
+                finally:
+                    db.close()
 
                 media_conf = None
                 if record:
@@ -736,20 +738,26 @@ class autoTransfer(_PluginBase):
                                 and item["type"] == service.type
                             ):
                                 media_conf = item
+                                if not media_conf:
+                                    logger.error(
+                                        f"请检查媒体服务器 {service.name} 的配置！"
+                                    )
+                                    return
                                 break
                     except Exception as e:
-                        print("JSON 解析失败:", e)
+                        logger.error("JSON 解析失败:", e)
+
                 from .plex.plex import Plex as class_plex
 
-                plex_instance = class_plex()
                 if hasattr(class_plex, "refresh_library_by_items_modified"):
 
-                    plex_instance.__init__(
-                        host=item["config"]["host"],
-                        token=item["config"]["token"],
-                        play_host=item["config"]["play_host"],
-                        sync_libraries=item["sync_libraries"],
+                    plex_instance = class_plex(
+                        host=media_conf["config"]["host"],
+                        token=media_conf["config"]["token"],
+                        play_host=media_conf["config"]["play_host"],
+                        sync_libraries=media_conf["sync_libraries"],
                     )
+
                     plex_instance.refresh_library_by_items_modified(items)
                     # service.instance.refresh_library_by_items(items)
                 elif hasattr(service.instance, "refresh_root_library"):
