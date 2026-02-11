@@ -984,7 +984,8 @@ class autoTransfer(_PluginBase):
 
                         transferinfo, mediainfo, file_meta = transfer_result
                         unique_key = Path(transferinfo.target_diritem.path)
-                        scrape_path = str(unique_key)
+                        # 统一路径格式，确保末尾有 /
+                        scrape_path = str(unique_key).rstrip('/') + '/'
 
                         # 初始化刮削状态
                         self._init_scrape_status(scrape_path)
