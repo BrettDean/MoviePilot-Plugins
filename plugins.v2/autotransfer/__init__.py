@@ -51,7 +51,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.45"
+    plugin_version = "1.0.46"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -381,6 +381,60 @@ class autoTransfer(_PluginBase):
 
         return download_limit_current_val, upload_limit_current_val
 
+    def _apply_downloader_speed_limit(self, log_message: str = None):
+        """
+        应用下载器限速
+        :param log_message: 日志消息
+        :return: 是否成功限速
+        """
+        if not self._downloaders_limit_enabled or self._downloaderSpeedLimit == 0:
+            return False
+        
+        try:
+            # 先获取当前下载器的限速
+            download_limit_current_val, _ = self.get_downloader_limit_current_val()
+            # 记录当前速度限制
+            self.save_data(
+                key="download_limit_current_val", value=download_limit_current_val
+            )
+            if (
+                float(download_limit_current_val)
+                > float(self._downloaderSpeedLimit)
+                or float(download_limit_current_val) == 0
+            ):
+                if log_message:
+                    logger.info(log_message)
+                else:
+                    logger.info(
+                        f"下载器限速成功设置为 {self._downloaderSpeedLimit} KiB/s"
+                    )
+                is_download_speed_limited = self.set_download_limit(
+                    self._downloaderSpeedLimit
+                )
+                self.save_data(
+                    key="is_download_speed_limited",
+                    value=is_download_speed_limited,
+                )
+                if not is_download_speed_limited:
+                    logger.error(
+                        f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)}"
+                    )
+                return is_download_speed_limited
+            else:
+                logger.info(
+                    f"不用设置下载器限速，当前下载器限速为 {download_limit_current_val} KiB/s 大于或等于设定值 {self._downloaderSpeedLimit} KiB/s"
+                )
+                return False
+        except Exception as e:
+            logger.error(
+                f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)} 的连通性，本次整理将跳过下载器限速"
+            )
+            logger.debug(
+                f"下载器限速失败: {str(e)}, traceback={traceback.format_exc()}"
+            )
+            self.save_data(key="is_download_speed_limited", value=False)
+            return False
+
     def moveFailedFilesToPath(self, fail_reason, src):
         """
         转移失败的文件到指定的路径
@@ -388,47 +442,8 @@ class autoTransfer(_PluginBase):
         :param fail_reason: 失败的原因
         :param src: 需要转移的文件路径
         """
-        if self._downloaders_limit_enabled:
-            try:
-                # 先获取当前下载器的限速
-                download_limit_current_val, _ = self.get_downloader_limit_current_val()
-                # 记录当前速度限制
-                self.save_data(
-                    key="download_limit_current_val", value=download_limit_current_val
-                )
-                if (
-                    float(download_limit_current_val)
-                    > float(self._downloaderSpeedLimit)
-                    or float(download_limit_current_val) == 0
-                ):
-                    is_download_speed_limited = self.set_download_limit(
-                        self._downloaderSpeedLimit
-                    )
-                    if is_download_speed_limited:
-                        logger.info(
-                            f"下载器限速成功设置为 {self._downloaderSpeedLimit} KiB/s"
-                        )
-                        # 记录已限速
-                        self.save_data(
-                            key="is_download_speed_limited",
-                            value=is_download_speed_limited,
-                        )
-                    else:
-                        logger.info(
-                            f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)} 的连通性，本次整理将跳过下载器限速"
-                        )
-                else:
-                    logger.info(
-                        f"不用设置下载器限速，当前下载器限速为 {download_limit_current_val} KiB/s 大于或等于设定值 {self._downloaderSpeedLimit} KiB/s"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)} 的连通性，本次整理将跳过下载器限速"
-                )
-                logger.debug(
-                    f"下载器限速失败: {str(e)}, traceback={traceback.format_exc()}"
-                )
-                self.save_data(key="is_download_speed_limited", value=False)
+        # 应用下载器限速
+        self._apply_downloader_speed_limit()
 
         try:
             logger.info(f"开始转移失败的文件 '{src}'")
@@ -451,22 +466,7 @@ class autoTransfer(_PluginBase):
             )
 
         # 恢复原速
-        if self._downloaders_limit_enabled and self.get_data(
-            key="is_download_speed_limited"
-        ):
-            recover_download_limit_success = self.set_download_limit(
-                download_limit=self.get_data(key="download_limit_current_val")
-                or download_limit_current_val
-            )
-            if recover_download_limit_success:
-                logger.info("取消下载器限速成功")
-                # 更新数据库中的限速状态为False
-                self.save_data(
-                    key="is_download_speed_limited",
-                    value=recover_download_limit_success,
-                )
-            else:
-                logger.error("取消下载器限速失败")
+        self._recover_downloader_speed_limit()
 
     def __update_plugin_state(self, value: str):
         """
@@ -551,16 +551,20 @@ class autoTransfer(_PluginBase):
             # 遍历所有目录
             for idx, mon_path in enumerate(self._dirconf.keys(), start=1):
                 logger.info(f"开始处理目录({idx}/{len(self._dirconf)}): {mon_path} ...")
+                
+                # 获取文件列表
                 list_files = SystemUtils.list_files(
                     directory=Path(mon_path),
                     extensions=settings.RMT_MEDIAEXT,
                     min_filesize=int(self._size),
                     recursive=True,
                 )
+                
                 # 去除 .parts 文件
                 list_files = [
                     f for f in list_files if not str(f).lower().endswith(".parts")
                 ]
+                
                 logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
                 unique_items = {}
 
@@ -585,64 +589,15 @@ class autoTransfer(_PluginBase):
                     if unique_key not in unique_items:
                         unique_items[unique_key] = (transferinfo, mediainfo, file_meta)
 
-                # 刮削
-                if self._scrape:
-                    max_retries = 3  # 最大重试次数
-                    for transferinfo, mediainfo, file_meta in unique_items.values():
-                        retry_count = 1
-                        while retry_count <= max_retries:
-                            try:
-                                logger.info(
-                                    f"开始刮削目录: {transferinfo.target_diritem.path}"
-                                )
-                                self.mediaChain.scrape_metadata(
-                                    fileitem=transferinfo.target_diritem,
-                                    meta=file_meta,
-                                    mediainfo=mediainfo,
-                                )
-                                logger.debug(
-                                    f"刮削目录成功: {transferinfo.target_diritem.path}"
-                                )
-                                break  # 成功后跳出循环
-                            except Exception as e:
-                                logger.warning(
-                                    f"目录第 {retry_count}/{max_retries} 次刮削失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
-                                )
-                                # time.sleep(3 * 60)
-                                time.sleep(3)
-                                retry_count += 1
-                                continue  # 重试
+                # 批量处理刮削
+                if self._scrape and unique_items:
+                    self._batch_scrape(unique_items.values())
 
-                # 广播整理完成事件，让插件'媒体库服务器刷新'通知媒体库刷新或使用修改版刷新plex媒体库
-                if self._refresh:
-                    for transferinfo, mediainfo, file_meta in unique_items.values():
-                        try:
-                            self.eventmanager.send_event(
-                                EventType.TransferComplete,
-                                {
-                                    "meta": file_meta,
-                                    "mediainfo": mediainfo,
-                                    "transferinfo": transferinfo,
-                                },
-                            )
-                            logger.info(
-                                f"成功通知媒体库刷新: {transferinfo.target_diritem.path}"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"通知媒体库刷新失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
-                            )
-                elif self._refresh_modified:
-                    for transferinfo, mediainfo, file_meta in unique_items.values():
-                        try:
-                            self._refresh_lib_modified(transferinfo, mediainfo)
-                            logger.info(
-                                f"成功通知媒体库刷新: {transferinfo.target_diritem.path}"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"通知媒体库刷新失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
-                            )
+                # 批量处理媒体库刷新
+                if self._refresh and unique_items:
+                    self._batch_refresh_media(unique_items.values())
+                elif self._refresh_modified and unique_items:
+                    self._batch_refresh_media_modified(unique_items.values())
 
             logger.info("目录内所有文件整理完成！")
             self.__update_plugin_state("finished")
@@ -652,6 +607,75 @@ class autoTransfer(_PluginBase):
                 f"插件{self.plugin_name} V{self.plugin_version} 运行失败，错误信息:{e}，traceback={traceback.format_exc()}"
             )
             self.__update_plugin_state("failed")
+            
+    def _batch_scrape(self, items):
+        """
+        批量处理刮削
+        :param items: 待刮削的项目列表
+        """
+        max_retries = 3  # 最大重试次数
+        for transferinfo, mediainfo, file_meta in items:
+            retry_count = 1
+            while retry_count <= max_retries:
+                try:
+                    logger.info(
+                        f"开始刮削目录: {transferinfo.target_diritem.path}"
+                    )
+                    self.mediaChain.scrape_metadata(
+                        fileitem=transferinfo.target_diritem,
+                        meta=file_meta,
+                        mediainfo=mediainfo,
+                    )
+                    logger.debug(
+                        f"刮削目录成功: {transferinfo.target_diritem.path}"
+                    )
+                    break  # 成功后跳出循环
+                except Exception as e:
+                    logger.warning(
+                        f"目录第 {retry_count}/{max_retries} 次刮削失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
+                    )
+                    time.sleep(3)
+                    retry_count += 1
+                    continue  # 重试
+                    
+    def _batch_refresh_media(self, items):
+        """
+        批量处理媒体库刷新
+        :param items: 待刷新的项目列表
+        """
+        for transferinfo, mediainfo, file_meta in items:
+            try:
+                self.eventmanager.send_event(
+                    EventType.TransferComplete,
+                    {
+                        "meta": file_meta,
+                        "mediainfo": mediainfo,
+                        "transferinfo": transferinfo,
+                    },
+                )
+                logger.info(
+                    f"成功通知媒体库刷新: {transferinfo.target_diritem.path}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"通知媒体库刷新失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
+                )
+                
+    def _batch_refresh_media_modified(self, items):
+        """
+        批量处理媒体库刷新（修改版）
+        :param items: 待刷新的项目列表
+        """
+        for transferinfo, mediainfo, file_meta in items:
+            try:
+                self._refresh_lib_modified(transferinfo, mediainfo)
+                logger.info(
+                    f"成功通知媒体库刷新: {transferinfo.target_diritem.path}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"通知媒体库刷新失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
+                )
 
     def _refresh_lib_modified(self, transferinfo, mediainfo):
         """
@@ -795,473 +819,7 @@ class autoTransfer(_PluginBase):
         )
         return file_meta
 
-    def __handle_file(self, event_path: str, mon_path: str):
-        """
-        同步一个文件
-        :param event_path: 事件文件路径
-        :param mon_path: 监控目录
-        """
-        file_path = Path(event_path)
-        try:
-            if not file_path.exists():
-                return
-            # 全程加锁
-            with lock:
-                transfer_history = self.transferhis.get_by_src(event_path)
-                if transfer_history:
-                    logger.info(f"文件已处理过: {event_path}")
-                    return
 
-                # 回收站及隐藏的文件不处理
-                if (
-                    event_path.find("/@Recycle/") != -1
-                    or event_path.find("/#recycle/") != -1
-                    or event_path.find("/.") != -1
-                    or event_path.find("/@eaDir") != -1
-                ):
-                    logger.debug(f"{event_path} 是回收站或隐藏的文件")
-                    return
-
-                # 命中过滤关键字不处理
-                if self._exclude_keywords:
-                    for keyword in self._exclude_keywords.split("\n"):
-                        if keyword and re.findall(keyword, event_path):
-                            logger.info(
-                                f"{event_path} 命中过滤关键字 {keyword}，不处理"
-                            )
-                            if (
-                                self._pathAfterMoveFailure is not None
-                                and self._transfer_type == "move"
-                                and self._move_excluded_files
-                            ):
-                                self.moveFailedFilesToPath(
-                                    "命中过滤关键字", str(file_path)
-                                )
-                            return
-
-                # 整理屏蔽词不处理
-                transfer_exclude_words = self.systemconfig.get(
-                    SystemConfigKey.TransferExcludeWords
-                )
-                if transfer_exclude_words:
-                    for keyword in transfer_exclude_words:
-                        if not keyword:
-                            continue
-                        if keyword and re.search(
-                            f"{keyword}", event_path, re.IGNORECASE
-                        ):
-                            logger.info(
-                                f"{event_path} 命中整理屏蔽词 {keyword}，不处理"
-                            )
-                            if (
-                                self._pathAfterMoveFailure is not None
-                                and self._transfer_type == "move"
-                                and self._move_excluded_files
-                            ):
-                                self.moveFailedFilesToPath(
-                                    "命中整理屏蔽词", str(file_path)
-                                )
-                            return
-
-                # 不是媒体文件不处理
-                if file_path.suffix.lower() not in [
-                    ext.lower() for ext in settings.RMT_MEDIAEXT
-                ]:
-                    logger.debug(f"{event_path} 不是媒体文件")
-                    return
-
-                # 判断是不是蓝光目录
-                if re.search(r"BDMV[/\\]STREAM", event_path, re.IGNORECASE):
-                    # 截取BDMV前面的路径
-                    blurray_dir = event_path[: event_path.find("BDMV")]
-                    file_path = Path(blurray_dir)
-                    logger.info(
-                        f"{event_path} 是蓝光目录，更正文件路径为: {str(file_path)}"
-                    )
-                    # 查询历史记录，已转移的不处理
-                    if self.transferhis.get_by_src(str(file_path)):
-                        logger.info(f"{file_path} 已整理过")
-                        return
-
-                # 元数据
-                file_meta = MetaInfoPath(file_path)
-                if not file_meta.name:
-                    logger.error(f"{file_path.name} 无法识别有效信息")
-                    return
-
-                # 通过文件路径从历史下载记录中获取tmdbid和type
-                # 先通过文件路径来查
-                get_by_path_result = self.downloadhis.get_by_path(str(file_path))
-                if get_by_path_result is not None:
-                    logger.info(
-                        f"通过文件路径 {str(file_path)} 从历史下载记录中获取到tmdbid={get_by_path_result.tmdbid}，type={get_by_path_result.type}"
-                    )
-                    file_meta = self.__update_file_meta(
-                        file_path=str(file_path),
-                        file_meta=file_meta,
-                        get_by_path_result=get_by_path_result,
-                    )
-                else:
-                    # 不行再通过文件父目录来查
-                    if str(file_path.parent) != mon_path:
-                        parent_path = str(file_path.parent)
-                        get_by_path_result = None
-
-                        # 尝试获取get_by_path_result，最多parent 3次
-                        for _ in range(3):
-                            # 如果父路径已经是mon_path了，就没意义了
-                            if parent_path == mon_path:
-                                break
-
-                            get_by_path_result = self.downloadhis.get_by_path(
-                                parent_path
-                            )
-                            if get_by_path_result:
-                                break  # 找到结果，跳出循环
-
-                            parent_path = str(
-                                Path(parent_path).parent
-                            )  # 获取父目录路径
-
-                        if get_by_path_result:
-                            logger.info(
-                                f"通过文件父目录 {parent_path} 从历史下载记录中获取到tmdbid={get_by_path_result.tmdbid}，type={get_by_path_result.type}"
-                            )
-                            file_meta = self.__update_file_meta(
-                                file_path=str(file_path),
-                                file_meta=file_meta,
-                                get_by_path_result=get_by_path_result,
-                            )
-                    else:
-                        logger.info(
-                            f"未从历史下载记录中获取到 {str(file_path)} 的tmdbid和type，只能走正常识别流程"
-                        )
-
-                # 判断文件大小
-                if (
-                    self._size
-                    and float(self._size) > 0
-                    and file_path.stat().st_size < float(self._size) * 1024**3
-                ):
-                    logger.info(f"{file_path} 文件大小小于监控文件大小，不处理")
-                    return
-
-                # 查询转移目的目录
-                target: Path = self._dirconf.get(mon_path)
-                # 查询转移方式
-                transfer_type = self._transferconf.get(mon_path)
-
-                # 查找这个文件项
-                file_item = self.storagechain.get_file_item(
-                    storage="local", path=file_path
-                )
-                if not file_item:
-                    logger.warn(f"{event_path.name} 未找到对应的文件")
-                    return
-                # 识别媒体信息
-                mediainfo: MediaInfo = self.chain.recognize_media(meta=file_meta)
-                if not mediainfo:
-                    logger.warn(f"未识别到媒体信息，路径: {file_item.path}")
-                    # 新增转移成功历史记录
-                    his = self.transferhis.add_fail(  # noqa: F841
-                        fileitem=file_item, mode=transfer_type, meta=file_meta
-                    )
-                    if self._notify:
-                        self.post_message(
-                            mtype=NotificationType.Manual,
-                            title=f"{file_item.path} 未识别到媒体信息，无法入库！\n",
-                        )
-                    # 转移失败文件到指定目录
-                    if (
-                        self._pathAfterMoveFailure is not None
-                        and self._transfer_type == "move"
-                        and self._move_failed_files
-                    ):
-                        self.moveFailedFilesToPath("未识别到媒体信息", file_item.path)
-                    return
-
-                # 如果未开启新增已入库媒体是否跟随TMDB信息变化则根据tmdbid查询之前的title
-                if not settings.SCRAP_FOLLOW_TMDB:
-                    transfer_history = self.transferhis.get_by_type_tmdbid(
-                        tmdbid=mediainfo.tmdb_id, mtype=mediainfo.type.value
-                    )
-                    if transfer_history:
-                        mediainfo.title = transfer_history.title
-                logger.info(
-                    f"{file_item.path} 识别为: {mediainfo.type.value} {mediainfo.title_year}"
-                )
-
-                # 获取集数据
-                if mediainfo.type == MediaType.TV:
-                    episodes_info = self.tmdbchain.tmdb_episodes(
-                        tmdbid=mediainfo.tmdb_id,
-                        season=(
-                            1
-                            if file_meta.begin_season is None
-                            else file_meta.begin_season
-                        ),
-                    )
-                else:
-                    episodes_info = None
-
-                # 查询转移目的目录
-                target_dir = DirectoryHelper().get_dir(
-                    mediainfo, src_path=Path(mon_path)
-                )
-                if (
-                    not target_dir
-                    or not target_dir.library_path
-                    or not target_dir.download_path.startswith(mon_path)
-                ):
-                    target_dir = TransferDirectoryConf()
-                    target_dir.library_path = target
-                    target_dir.transfer_type = transfer_type
-                    target_dir.scraping = self._scrape
-                    target_dir.renaming = True
-                    target_dir.notify = False
-                    target_dir.overwrite_mode = (
-                        self._overwrite_mode.get(mon_path) or "never"
-                    )
-                    target_dir.library_storage = "local"
-                    target_dir.library_category_folder = self._category
-                else:
-                    target_dir.transfer_type = transfer_type
-                    target_dir.scraping = self._scrape
-
-                if not target_dir.library_path:
-                    logger.error(f"未配置源目录 {mon_path} 的目的目录")
-                    return
-
-                # 下载器限速
-                if self._downloaders_limit_enabled:
-                    if (
-                        target_dir.transfer_type
-                        in [
-                            "move",
-                            "copy",
-                            "rclone_copy",
-                            "rclone_move",
-                        ]
-                        and self._downloaders_limit_enabled
-                        and self._downloaderSpeedLimit != 0
-                    ):
-                        try:
-                            # 先获取当前下载器的限速
-                            download_limit_current_val, _ = (
-                                self.get_downloader_limit_current_val()
-                            )
-                            # 记录当前速度限制
-                            self.save_data(
-                                key="download_limit_current_val",
-                                value=download_limit_current_val,
-                            )
-
-                            if (
-                                float(download_limit_current_val)
-                                > float(self._downloaderSpeedLimit)
-                                or float(download_limit_current_val) == 0
-                            ):
-                                logger.info(
-                                    f"下载器限速 - {', '.join(self._downloaders)}，下载速度限制为 {self._downloaderSpeedLimit} KiB/s，因正在移动或复制文件{file_item.path}"
-                                )
-                                is_download_speed_limited = self.set_download_limit(
-                                    self._downloaderSpeedLimit
-                                )
-                                self.save_data(
-                                    key="is_download_speed_limited",
-                                    value=is_download_speed_limited,
-                                )
-                                if not is_download_speed_limited:
-                                    logger.error(
-                                        f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)}"
-                                    )
-                            else:
-                                logger.info(
-                                    f"不用设置下载器限速，当前下载器限速为 {download_limit_current_val} KiB/s 大于或等于设定值 {self._downloaderSpeedLimit} KiB/s"
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)} 的连通性，本次整理将跳过下载器限速"
-                            )
-                            logger.debug(
-                                f"下载器限速失败: {str(e)}, traceback={traceback.format_exc()}"
-                            )
-                            self.save_data(
-                                key="is_download_speed_limited",
-                                value=False,
-                            )
-                    else:
-                        if self._downloaderSpeedLimit == 0:
-                            log_msg = "下载速度限制为0或为空，默认关闭限速"
-                        elif target_dir.transfer_type not in [
-                            "move",
-                            "copy",
-                            "rclone_copy",
-                            "rclone_move",
-                        ]:
-                            log_msg = "转移方式不是移动或复制，下载器限速默认关闭"
-                        logger.info(log_msg)
-                else:
-                    if not self._downloaders_limit_enabled:
-                        logger.info("下载器限速未开启")
-
-                # 转移文件
-                transferinfo: TransferInfo = self.chain.transfer(
-                    fileitem=file_item,
-                    meta=file_meta,
-                    mediainfo=mediainfo,
-                    target_directory=target_dir,
-                    episodes_info=episodes_info,
-                )
-                # 恢复原速
-                if self._downloaders_limit_enabled and self.get_data(
-                    key="is_download_speed_limited"
-                ):
-                    recover_download_limit_success = self.set_download_limit(
-                        download_limit=self.get_data(key="download_limit_current_val")
-                        or download_limit_current_val
-                    )
-                    if recover_download_limit_success:
-                        logger.info("取消下载器限速成功")
-                        # 更新数据库中的限速状态为False
-                        self.save_data(key="is_download_speed_limited", value=False)
-                    else:
-                        logger.error("取消下载器限速失败")
-
-                if not transferinfo:
-                    logger.error("文件转移模块运行失败")
-                    return
-
-                if not transferinfo.success:
-                    # 转移失败
-                    logger.warn(f"{file_path.name} 入库失败: {transferinfo.message}")
-
-                    if self._history:
-                        # 新增转移失败历史记录
-                        self.transferhis.add_fail(
-                            fileitem=file_item,
-                            mode=transfer_type,
-                            meta=file_meta,
-                            mediainfo=mediainfo,
-                            transferinfo=transferinfo,
-                        )
-                    if self._notify:
-                        self.post_message(
-                            mtype=NotificationType.Manual,
-                            title=f"{mediainfo.title_year}{file_meta.season_episode} 入库失败！",
-                            text=f"原因: {transferinfo.message or '未知'}",
-                            image=mediainfo.get_message_image(),
-                        )
-                    # 转移失败文件到指定目录
-                    if (
-                        self._pathAfterMoveFailure is not None
-                        and self._transfer_type == "move"
-                        and self._move_failed_files
-                    ):
-                        self.moveFailedFilesToPath(transferinfo.message, file_item.path)
-                    return
-
-                if self._history:
-                    # 新增转移成功历史记录
-                    self.transferhis.add_success(
-                        fileitem=file_item,
-                        mode=transfer_type,
-                        meta=file_meta,
-                        mediainfo=mediainfo,
-                        transferinfo=transferinfo,
-                    )
-
-                if self._notify:
-                    # 发送消息汇总
-                    media_list = (
-                        self._medias.get(mediainfo.title_year + " " + file_meta.season)
-                        or {}
-                    )
-                    if media_list:
-                        media_files = media_list.get("files") or []
-                        if media_files:
-                            file_exists = False
-                            for file in media_files:
-                                if str(file_path) == file.get("path"):
-                                    file_exists = True
-                                    break
-                            if not file_exists:
-                                media_files.append(
-                                    {
-                                        "path": str(file_path),
-                                        "mediainfo": mediainfo,
-                                        "file_meta": file_meta,
-                                        "transferinfo": transferinfo,
-                                    }
-                                )
-                        else:
-                            media_files = [
-                                {
-                                    "path": str(file_path),
-                                    "mediainfo": mediainfo,
-                                    "file_meta": file_meta,
-                                    "transferinfo": transferinfo,
-                                }
-                            ]
-                        media_list = {
-                            "files": media_files,
-                            "time": datetime.datetime.now(),
-                        }
-                    else:
-                        media_list = {
-                            "files": [
-                                {
-                                    "path": str(file_path),
-                                    "mediainfo": mediainfo,
-                                    "file_meta": file_meta,
-                                    "transferinfo": transferinfo,
-                                }
-                            ],
-                            "time": datetime.datetime.now(),
-                        }
-                    self._medias[mediainfo.title_year + " " + file_meta.season] = (
-                        media_list
-                    )
-
-                if self._softlink:
-                    # 通知实时软链接生成
-                    self.eventmanager.send_event(
-                        EventType.PluginAction,
-                        {
-                            "file_path": str(transferinfo.target_item.path),
-                            "action": "softlink_file",
-                        },
-                    )
-
-                if self._strm:
-                    # 通知Strm助手生成
-                    self.eventmanager.send_event(
-                        EventType.PluginAction,
-                        {
-                            "file_path": str(transferinfo.target_item.path),
-                            "action": "cloudstrm_file",
-                        },
-                    )
-
-                # 移动模式删除空目录
-                if transfer_type == "move" and self._del_empty_dir:
-                    for file_dir in file_path.parents:
-                        if len(str(file_dir)) <= len(str(Path(mon_path))):
-                            # 重要，删除到监控目录为止
-                            break
-                        files = SystemUtils.list_files(
-                            file_dir, settings.RMT_MEDIAEXT + settings.DOWNLOAD_TMPEXT
-                        )
-                        if not files:
-                            logger.warn(f"移动模式，删除空目录: {file_dir}")
-                            shutil.rmtree(file_dir, ignore_errors=True)
-
-                # 返回成功的文件
-                return transferinfo, mediainfo, file_meta
-
-        except Exception as e:
-            logger.error(f"目录监控发生错误: {str(e)} - {traceback.format_exc()}")
-            return
 
     def send_transfer_message(
         self,
@@ -1479,6 +1037,652 @@ class autoTransfer(_PluginBase):
                 }
             ]
         return []
+        
+    def _handle_error(self, error_type: str, error_message: str, file_item=None, file_meta=None, transfer_type=None):
+        """
+        统一错误处理
+        :param error_type: 错误类型
+        :param error_message: 错误消息
+        :param file_item: 文件项
+        :param file_meta: 文件元数据
+        :param transfer_type: 转移方式
+        """
+        logger.error(f"{error_type}: {error_message}")
+        
+        # 新增转移失败历史记录
+        if file_item and file_meta and transfer_type:
+            try:
+                self.transferhis.add_fail(
+                    fileitem=file_item, mode=transfer_type, meta=file_meta
+                )
+            except Exception as e:
+                logger.error(f"添加转移失败历史记录失败: {str(e)}")
+        
+        # 发送通知
+        if self._notify and file_item:
+            try:
+                self.post_message(
+                    mtype=NotificationType.Manual,
+                    title=f"{file_item.path} {error_type}，无法入库！\n",
+                    text=f"错误信息: {error_message}"
+                )
+            except Exception as e:
+                logger.error(f"发送通知失败: {str(e)}")
+        
+        # 转移失败文件到指定目录
+        if (
+            file_item and self._pathAfterMoveFailure is not None
+            and self._transfer_type == "move"
+            and self._move_failed_files
+        ):
+            try:
+                self.moveFailedFilesToPath(error_type, file_item.path)
+            except Exception as e:
+                logger.error(f"转移失败文件失败: {str(e)}")
+
+    def _check_file_history(self, event_path: str, file_path: Path) -> bool:
+        """
+        检查文件历史记录
+        :param event_path: 事件文件路径
+        :param file_path: 文件路径
+        :return: 是否继续处理
+        """
+        # 检查文件是否已处理过
+        transfer_history = self.transferhis.get_by_src(event_path)
+        if transfer_history:
+            logger.info(f"文件已处理过: {event_path}")
+            return False
+        return True
+
+    def _check_file_filter(self, event_path: str, file_path: Path) -> bool:
+        """
+        检查文件过滤
+        :param event_path: 事件文件路径
+        :param file_path: 文件路径
+        :return: 是否继续处理
+        """
+        # 回收站及隐藏的文件不处理
+        if (
+            event_path.find("/@Recycle/") != -1
+            or event_path.find("/#recycle/") != -1
+            or event_path.find("/.") != -1
+            or event_path.find("/@eaDir") != -1
+        ):
+            logger.debug(f"{event_path} 是回收站或隐藏的文件")
+            return False
+
+        # 命中过滤关键字不处理
+        if self._exclude_keywords:
+            for keyword in self._exclude_keywords.split("\n"):
+                if keyword and re.findall(keyword, event_path):
+                    logger.info(
+                        f"{event_path} 命中过滤关键字 {keyword}，不处理"
+                    )
+                    if (
+                        self._pathAfterMoveFailure is not None
+                        and self._transfer_type == "move"
+                        and self._move_excluded_files
+                    ):
+                        self.moveFailedFilesToPath(
+                            "命中过滤关键字", str(file_path)
+                        )
+                    return False
+
+        # 整理屏蔽词不处理
+        transfer_exclude_words = self.systemconfig.get(
+            SystemConfigKey.TransferExcludeWords
+        )
+        if transfer_exclude_words:
+            for keyword in transfer_exclude_words:
+                if not keyword:
+                    continue
+                if keyword and re.search(
+                    f"{keyword}", event_path, re.IGNORECASE
+                ):
+                    logger.info(
+                        f"{event_path} 命中整理屏蔽词 {keyword}，不处理"
+                    )
+                    if (
+                        self._pathAfterMoveFailure is not None
+                        and self._transfer_type == "move"
+                        and self._move_excluded_files
+                    ):
+                        self.moveFailedFilesToPath(
+                            "命中整理屏蔽词", str(file_path)
+                        )
+                    return False
+
+        # 不是媒体文件不处理
+        if file_path.suffix.lower() not in [
+            ext.lower() for ext in settings.RMT_MEDIAEXT
+        ]:
+            logger.debug(f"{event_path} 不是媒体文件")
+            return False
+
+        # 判断是不是蓝光目录
+        if re.search(r"BDMV[/\\]STREAM", event_path, re.IGNORECASE):
+            # 截取BDMV前面的路径
+            blurray_dir = event_path[: event_path.find("BDMV")]
+            file_path = Path(blurray_dir)
+            logger.info(
+                f"{event_path} 是蓝光目录，更正文件路径为: {str(file_path)}"
+            )
+            # 查询历史记录，已转移的不处理
+            if self.transferhis.get_by_src(str(file_path)):
+                logger.info(f"{file_path} 已整理过")
+                return False
+        return True
+
+    def _check_file_size(self, file_path: Path) -> bool:
+        """
+        检查文件大小
+        :param file_path: 文件路径
+        :return: 是否继续处理
+        """
+        if (
+            self._size
+            and float(self._size) > 0
+            and file_path.stat().st_size < float(self._size) * 1024**3
+        ):
+            logger.info(f"{file_path} 文件大小小于监控文件大小，不处理")
+            return False
+        return True
+
+    def _get_file_meta(self, file_path: Path, mon_path: str) -> Optional[MetaInfoPath]:
+        """
+        获取文件元数据
+        :param file_path: 文件路径
+        :param mon_path: 监控目录
+        :return: 文件元数据
+        """
+        # 元数据
+        file_meta = MetaInfoPath(file_path)
+        if not file_meta.name:
+            logger.error(f"{file_path.name} 无法识别有效信息")
+            return None
+            
+        # 通过文件路径从历史下载记录中获取tmdbid和type
+        # 先通过文件路径来查
+        get_by_path_result = None
+        
+        # 构建查询路径列表
+        query_paths = [str(file_path)]
+        
+        # 添加父目录到查询路径列表，最多3级
+        if str(file_path.parent) != mon_path:
+            parent_path = str(file_path.parent)
+            for _ in range(3):
+                if parent_path == mon_path:
+                    break
+                query_paths.append(parent_path)
+                parent_path = str(Path(parent_path).parent)
+        
+        # 批量查询下载历史记录
+        for path in query_paths:
+            get_by_path_result = self.downloadhis.get_by_path(path)
+            if get_by_path_result:
+                logger.info(
+                    f"通过路径 {path} 从历史下载记录中获取到tmdbid={get_by_path_result.tmdbid}，type={get_by_path_result.type}"
+                )
+                file_meta = self.__update_file_meta(
+                    file_path=str(file_path),
+                    file_meta=file_meta,
+                    get_by_path_result=get_by_path_result,
+                )
+                break
+        
+        if not get_by_path_result:
+            logger.info(
+                f"未从历史下载记录中获取到 {str(file_path)} 的tmdbid和type，只能走正常识别流程"
+            )
+        
+        return file_meta
+
+    def _get_transfer_config(self, mon_path: str) -> Tuple[Optional[Path], Optional[str]]:
+        """
+        查询转移配置
+        :param mon_path: 监控目录
+        :return: (目标目录, 转移方式)
+        """
+        # 查询转移目的目录
+        target: Path = self._dirconf.get(mon_path)
+        # 查询转移方式
+        transfer_type = self._transferconf.get(mon_path)
+        return target, transfer_type
+
+    def _get_file_item(self, file_path: Path) -> Optional[Any]:
+        """
+        获取文件项
+        :param file_path: 文件路径
+        :return: 文件项
+        """
+        try:
+            # 查找这个文件项
+            file_item = self.storagechain.get_file_item(
+                storage="local", path=file_path
+            )
+            if not file_item:
+                logger.warn(f"{file_path.name} 未找到对应的文件")
+                return None
+            return file_item
+        except Exception as e:
+            logger.error(f"获取文件项失败: {str(e)}, traceback={traceback.format_exc()}")
+            return None
+
+    def _get_media_info(self, file_item: Any, file_meta: MetaInfoPath, transfer_type: str) -> Optional[MediaInfo]:
+        """
+        识别媒体信息
+        :param file_item: 文件项
+        :param file_meta: 文件元数据
+        :param transfer_type: 转移方式
+        :return: 媒体信息
+        """
+        # 识别媒体信息
+        mediainfo: MediaInfo = self.chain.recognize_media(meta=file_meta)
+        if not mediainfo:
+            logger.warn(f"未识别到媒体信息，路径: {file_item.path}")
+            # 新增转移失败历史记录
+            self.transferhis.add_fail(
+                fileitem=file_item, mode=transfer_type, meta=file_meta
+            )
+            if self._notify:
+                self.post_message(
+                    mtype=NotificationType.Manual,
+                    title=f"{file_item.path} 未识别到媒体信息，无法入库！\n",
+                )
+            # 转移失败文件到指定目录
+            if (
+                self._pathAfterMoveFailure is not None
+                and self._transfer_type == "move"
+                and self._move_failed_files
+            ):
+                self.moveFailedFilesToPath("未识别到媒体信息", file_item.path)
+            return None
+            
+        # 如果未开启新增已入库媒体是否跟随TMDB信息变化则根据tmdbid查询之前的title
+        if not settings.SCRAP_FOLLOW_TMDB:
+            transfer_history = self.transferhis.get_by_type_tmdbid(
+                tmdbid=mediainfo.tmdb_id, mtype=mediainfo.type.value
+            )
+            if transfer_history:
+                mediainfo.title = transfer_history.title
+        logger.info(
+            f"{file_item.path} 识别为: {mediainfo.type.value} {mediainfo.title_year}"
+        )
+        return mediainfo
+
+    def _get_episodes_info(self, mediainfo: MediaInfo, file_meta: MetaInfoPath) -> Optional[Any]:
+        """
+        获取剧集信息
+        :param mediainfo: 媒体信息
+        :param file_meta: 文件元数据
+        :return: 剧集信息
+        """
+        if mediainfo.type == MediaType.TV:
+            return self.tmdbchain.tmdb_episodes(
+                tmdbid=mediainfo.tmdb_id,
+                season=(
+                    1
+                    if file_meta.begin_season is None
+                    else file_meta.begin_season
+                ),
+            )
+        return None
+
+    def _get_target_dir(self, mediainfo: MediaInfo, mon_path: str, target: Path, transfer_type: str) -> Optional[TransferDirectoryConf]:
+        """
+        获取目标目录
+        :param mediainfo: 媒体信息
+        :param mon_path: 监控目录
+        :param target: 目标目录
+        :param transfer_type: 转移方式
+        :return: 目标目录配置
+        """
+        # 查询转移目的目录
+        target_dir = DirectoryHelper().get_dir(
+            mediainfo, src_path=Path(mon_path)
+        )
+        if (
+            not target_dir
+            or not target_dir.library_path
+            or not target_dir.download_path.startswith(mon_path)
+        ):
+            target_dir = TransferDirectoryConf()
+            target_dir.library_path = target
+            target_dir.transfer_type = transfer_type
+            target_dir.scraping = self._scrape
+            target_dir.renaming = True
+            target_dir.notify = False
+            target_dir.overwrite_mode = (
+                self._overwrite_mode.get(mon_path) or "never"
+            )
+            target_dir.library_storage = "local"
+            target_dir.library_category_folder = self._category
+        else:
+            target_dir.transfer_type = transfer_type
+            target_dir.scraping = self._scrape
+
+        if not target_dir.library_path:
+            logger.error(f"未配置源目录 {mon_path} 的目的目录")
+            return None
+        return target_dir
+
+    def _handle_downloader_speed_limit(self, file_item: Any, target_dir: TransferDirectoryConf):
+        """
+        处理下载器限速
+        :param file_item: 文件项
+        :param target_dir: 目标目录配置
+        """
+        if self._downloaders_limit_enabled:
+            if (
+                target_dir.transfer_type
+                in [
+                    "move",
+                    "copy",
+                    "rclone_copy",
+                    "rclone_move",
+                ]
+                and self._downloaders_limit_enabled
+                and self._downloaderSpeedLimit != 0
+            ):
+                # 应用下载器限速
+                log_message = f"下载器限速 - {', '.join(self._downloaders)}，下载速度限制为 {self._downloaderSpeedLimit} KiB/s，因正在移动或复制文件{file_item.path}"
+                self._apply_downloader_speed_limit(log_message)
+            else:
+                if self._downloaderSpeedLimit == 0:
+                    log_msg = "下载速度限制为0或为空，默认关闭限速"
+                elif target_dir.transfer_type not in [
+                    "move",
+                    "copy",
+                    "rclone_copy",
+                    "rclone_move",
+                ]:
+                    log_msg = "转移方式不是移动或复制，下载器限速默认关闭"
+                logger.info(log_msg)
+        else:
+            logger.info("下载器限速未开启")
+
+    def _transfer_file(self, file_item: Any, file_meta: MetaInfoPath, mediainfo: MediaInfo, target_dir: TransferDirectoryConf, episodes_info: Optional[Any]) -> Optional[TransferInfo]:
+        """
+        转移文件
+        :param file_item: 文件项
+        :param file_meta: 文件元数据
+        :param mediainfo: 媒体信息
+        :param target_dir: 目标目录配置
+        :param episodes_info: 剧集信息
+        :return: 转移信息
+        """
+        try:
+            # 转移文件
+            transferinfo: TransferInfo = self.chain.transfer(
+                fileitem=file_item,
+                meta=file_meta,
+                mediainfo=mediainfo,
+                target_directory=target_dir,
+                episodes_info=episodes_info,
+            )
+            return transferinfo
+        except Exception as e:
+            logger.error(f"文件转移失败: {str(e)}, traceback={traceback.format_exc()}")
+            return None
+
+    def _recover_downloader_speed_limit(self):
+        """
+        恢复下载器限速
+        """
+        if self._downloaders_limit_enabled and self.get_data(
+            key="is_download_speed_limited"
+        ):
+            try:
+                download_limit_current_val = self.get_data(key="download_limit_current_val")
+                recover_download_limit_success = self.set_download_limit(
+                    download_limit_current_val
+                )
+                if recover_download_limit_success:
+                    logger.info("取消下载器限速成功")
+                    # 更新数据库中的限速状态为False
+                    self.save_data(key="is_download_speed_limited", value=False)
+                else:
+                    logger.error("取消下载器限速失败")
+            except Exception as e:
+                logger.error(f"恢复下载器限速失败: {str(e)}")
+
+    def _handle_transfer_failure(self, file_item: Any, file_path: Path, transfer_type: str, file_meta: MetaInfoPath, mediainfo: MediaInfo, transferinfo: TransferInfo):
+        """
+        处理转移失败
+        :param file_item: 文件项
+        :param file_path: 文件路径
+        :param transfer_type: 转移方式
+        :param file_meta: 文件元数据
+        :param mediainfo: 媒体信息
+        :param transferinfo: 转移信息
+        """
+        # 转移失败
+        logger.warn(f"{file_path.name} 入库失败: {transferinfo.message}")
+
+        if self._history:
+            # 新增转移失败历史记录
+            self.transferhis.add_fail(
+                fileitem=file_item,
+                mode=transfer_type,
+                meta=file_meta,
+                mediainfo=mediainfo,
+                transferinfo=transferinfo,
+            )
+        if self._notify:
+            self.post_message(
+                mtype=NotificationType.Manual,
+                title=f"{mediainfo.title_year}{file_meta.season_episode} 入库失败！",
+                text=f"原因: {transferinfo.message or '未知'}",
+                image=mediainfo.get_message_image(),
+            )
+        # 转移失败文件到指定目录
+        if (
+            self._pathAfterMoveFailure is not None
+            and self._transfer_type == "move"
+            and self._move_failed_files
+        ):
+            self.moveFailedFilesToPath(transferinfo.message, file_item.path)
+
+    def _add_to_media_list(self, mediainfo: MediaInfo, file_meta: MetaInfoPath, file_path: Path, transferinfo: TransferInfo):
+        """
+        添加到媒体列表
+        :param mediainfo: 媒体信息
+        :param file_meta: 文件元数据
+        :param file_path: 文件路径
+        :param transferinfo: 转移信息
+        """
+        media_key = mediainfo.title_year + " " + file_meta.season
+        media_list = self._medias.get(media_key) or {}
+        
+        if media_list:
+            media_files = media_list.get("files") or []
+            if media_files:
+                file_exists = False
+                for file in media_files:
+                    if str(file_path) == file.get("path"):
+                        file_exists = True
+                        break
+                if not file_exists:
+                    media_files.append(
+                        {
+                            "path": str(file_path),
+                            "mediainfo": mediainfo,
+                            "file_meta": file_meta,
+                            "transferinfo": transferinfo,
+                        }
+                    )
+            else:
+                media_files = [
+                    {
+                        "path": str(file_path),
+                        "mediainfo": mediainfo,
+                        "file_meta": file_meta,
+                        "transferinfo": transferinfo,
+                    }
+                ]
+            media_list = {
+                "files": media_files,
+                "time": datetime.datetime.now(),
+            }
+        else:
+            media_list = {
+                "files": [
+                    {
+                        "path": str(file_path),
+                        "mediainfo": mediainfo,
+                        "file_meta": file_meta,
+                        "transferinfo": transferinfo,
+                    }
+                ],
+                "time": datetime.datetime.now(),
+            }
+        self._medias[media_key] = media_list
+
+    def _delete_empty_dirs(self, file_path: Path, mon_path: str):
+        """
+        删除空目录
+        :param file_path: 文件路径
+        :param mon_path: 监控目录
+        """
+        for file_dir in file_path.parents:
+            if len(str(file_dir)) <= len(str(Path(mon_path))):
+                # 重要，删除到监控目录为止
+                break
+            files = SystemUtils.list_files(
+                file_dir, settings.RMT_MEDIAEXT + settings.DOWNLOAD_TMPEXT
+            )
+            if not files:
+                logger.warn(f"移动模式，删除空目录: {file_dir}")
+                shutil.rmtree(file_dir, ignore_errors=True)
+
+    def _handle_transfer_success(self, file_item: Any, file_path: Path, transfer_type: str, file_meta: MetaInfoPath, mediainfo: MediaInfo, transferinfo: TransferInfo, mon_path: str):
+        """
+        处理转移成功
+        :param file_item: 文件项
+        :param file_path: 文件路径
+        :param transfer_type: 转移方式
+        :param file_meta: 文件元数据
+        :param mediainfo: 媒体信息
+        :param transferinfo: 转移信息
+        :param mon_path: 监控目录
+        """
+        if self._history:
+            # 新增转移成功历史记录
+            self.transferhis.add_success(
+                fileitem=file_item,
+                mode=transfer_type,
+                meta=file_meta,
+                mediainfo=mediainfo,
+                transferinfo=transferinfo,
+            )
+
+        if self._notify:
+            # 发送消息汇总
+            self._add_to_media_list(mediainfo, file_meta, file_path, transferinfo)
+
+        if self._softlink:
+            # 通知实时软链接生成
+            self.eventmanager.send_event(
+                EventType.PluginAction,
+                {
+                    "file_path": str(transferinfo.target_item.path),
+                    "action": "softlink_file",
+                },
+            )
+
+        if self._strm:
+            # 通知Strm助手生成
+            self.eventmanager.send_event(
+                EventType.PluginAction,
+                {
+                    "file_path": str(transferinfo.target_item.path),
+                    "action": "cloudstrm_file",
+                },
+            )
+
+        # 移动模式删除空目录
+        if transfer_type == "move" and self._del_empty_dir:
+            self._delete_empty_dirs(file_path, mon_path)
+
+    def __handle_file(self, event_path: str, mon_path: str):
+        """
+        同步一个文件
+        :param event_path: 事件文件路径
+        :param mon_path: 监控目录
+        """
+        file_path = Path(event_path)
+        try:
+            if not file_path.exists():
+                return
+            # 全程加锁
+            with lock:
+                # 检查文件历史
+                if not self._check_file_history(event_path, file_path):
+                    return
+                    
+                # 检查文件过滤
+                if not self._check_file_filter(event_path, file_path):
+                    return
+                    
+                # 检查文件大小
+                if not self._check_file_size(file_path):
+                    return
+                    
+                # 获取文件元数据
+                file_meta = self._get_file_meta(file_path, mon_path)
+                if not file_meta:
+                    return
+                    
+                # 查询转移配置
+                target, transfer_type = self._get_transfer_config(mon_path)
+                if not target:
+                    return
+                    
+                # 获取文件项
+                file_item = self._get_file_item(file_path)
+                if not file_item:
+                    return
+                    
+                # 识别媒体信息
+                mediainfo = self._get_media_info(file_item, file_meta, transfer_type)
+                if not mediainfo:
+                    return
+                    
+                # 获取剧集信息
+                episodes_info = self._get_episodes_info(mediainfo, file_meta)
+                
+                # 获取目标目录
+                target_dir = self._get_target_dir(mediainfo, mon_path, target, transfer_type)
+                if not target_dir:
+                    return
+                    
+                # 处理下载器限速
+                self._handle_downloader_speed_limit(file_item, target_dir)
+                
+                # 转移文件
+                transferinfo = self._transfer_file(file_item, file_meta, mediainfo, target_dir, episodes_info)
+                if not transferinfo:
+                    logger.error("文件转移模块运行失败")
+                    return
+                    
+                # 恢复下载器限速
+                self._recover_downloader_speed_limit()
+                
+                # 处理转移失败
+                if not transferinfo.success:
+                    self._handle_transfer_failure(file_item, file_path, transfer_type, file_meta, mediainfo, transferinfo)
+                    return
+                    
+                # 处理转移成功
+                self._handle_transfer_success(file_item, file_path, transfer_type, file_meta, mediainfo, transferinfo, mon_path)
+                
+                # 返回成功的文件
+                return transferinfo, mediainfo, file_meta
+
+        except Exception as e:
+            logger.error(f"目录监控发生错误: {str(e)} - {traceback.format_exc()}")
+            return
 
     def __get_alert_props(self) -> Tuple[str, str, str]:
         """

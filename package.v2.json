@@ -3,11 +3,12 @@
     "name": "autoTransfer",
     "description": "类似v1的目录监控，可定期整理文件",
     "labels": "autoTransfer",
-    "version": "1.0.45",
+    "version": "1.0.46",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png",
     "author": "Dean",
     "level": 1,
     "history": {
+      "v1.0.46": "autoTransfer代码重构",
       "v1.0.45": "尝试修复涉及Discord通知卡住",
       "v1.0.44": "优化plex刷新媒体库的路径，将刷新某个库改为刷新库内的特定文件夹",
       "v1.0.43": "docs: 配置面板显示细节调整",
