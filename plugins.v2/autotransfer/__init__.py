@@ -314,11 +314,15 @@ class autoTransfer(_PluginBase):
         """
         服务信息
         """
-        if not self._downloaders:
+        # 实时获取最新配置，使配置更新立即生效
+        current_config = self.get_config()
+        current_downloaders = current_config.get("downloaders")
+        
+        if not current_downloaders:
             logger.warning("尚未配置下载器，请检查配置")
             return None
 
-        services = self.downloader_helper.get_services(name_filters=self._downloaders)
+        services = self.downloader_helper.get_services(name_filters=current_downloaders)
 
         if not services:
             logger.warning("获取下载器实例失败，请检查配置")
@@ -408,7 +412,13 @@ class autoTransfer(_PluginBase):
         :param log_message: 日志消息
         :return: 是否成功限速
         """
-        if not self._downloaders_limit_enabled or self._downloaderSpeedLimit == 0:
+        # 实时获取最新配置，使配置更新立即生效
+        current_config = self.get_config()
+        current_downloaders_limit_enabled = current_config.get("downloaders_limit_enabled", False)
+        current_downloaderSpeedLimit = current_config.get("downloaderSpeedLimit", 0)
+        current_downloaders = current_config.get("downloaders")
+        
+        if not current_downloaders_limit_enabled or current_downloaderSpeedLimit == 0:
             return False
         
         try:
@@ -420,17 +430,17 @@ class autoTransfer(_PluginBase):
             )
             if (
                 float(download_limit_current_val)
-                > float(self._downloaderSpeedLimit)
+                > float(current_downloaderSpeedLimit)
                 or float(download_limit_current_val) == 0
             ):
                 if log_message:
                     logger.info(log_message)
                 else:
                     logger.info(
-                        f"下载器限速成功设置为 {self._downloaderSpeedLimit} KiB/s"
+                        f"下载器限速成功设置为 {current_downloaderSpeedLimit} KiB/s"
                     )
                 is_download_speed_limited = self.set_download_limit(
-                    self._downloaderSpeedLimit
+                    current_downloaderSpeedLimit
                 )
                 self.save_data(
                     key="is_download_speed_limited",
@@ -438,17 +448,17 @@ class autoTransfer(_PluginBase):
                 )
                 if not is_download_speed_limited:
                     logger.error(
-                        f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)}"
+                        f"下载器限速失败，请检查下载器 {', '.join(current_downloaders)}"
                     )
                 return is_download_speed_limited
             else:
                 logger.info(
-                    f"不用设置下载器限速，当前下载器限速为 {download_limit_current_val} KiB/s 大于或等于设定值 {self._downloaderSpeedLimit} KiB/s"
+                    f"不用设置下载器限速，当前下载器限速为 {download_limit_current_val} KiB/s 大于或等于设定值 {current_downloaderSpeedLimit} KiB/s"
                 )
                 return False
         except Exception as e:
             logger.error(
-                f"下载器限速失败，请检查下载器 {', '.join(self._downloaders)} 的连通性，本次整理将跳过下载器限速"
+                f"下载器限速失败，请检查下载器 {', '.join(current_downloaders)} 的连通性，本次整理将跳过下载器限速"
             )
             logger.debug(
                 f"下载器限速失败: {str(e)}, traceback={traceback.format_exc()}"
@@ -1973,7 +1983,13 @@ class autoTransfer(_PluginBase):
         :param file_item: 文件项
         :param target_dir: 目标目录配置
         """
-        if self._downloaders_limit_enabled:
+        # 实时获取最新配置，使配置更新立即生效
+        current_config = self.get_config()
+        current_downloaders_limit_enabled = current_config.get("downloaders_limit_enabled", False)
+        current_downloaderSpeedLimit = current_config.get("downloaderSpeedLimit", 0)
+        current_downloaders = current_config.get("downloaders")
+        
+        if current_downloaders_limit_enabled:
             if (
                 target_dir.transfer_type
                 in [
@@ -1982,14 +1998,14 @@ class autoTransfer(_PluginBase):
                     "rclone_copy",
                     "rclone_move",
                 ]
-                and self._downloaders_limit_enabled
-                and self._downloaderSpeedLimit != 0
+                and current_downloaders_limit_enabled
+                and current_downloaderSpeedLimit != 0
             ):
                 # 应用下载器限速
-                log_message = f"下载器限速 - {', '.join(self._downloaders)}，下载速度限制为 {self._downloaderSpeedLimit} KiB/s，因正在移动或复制文件{file_item.path}"
+                log_message = f"下载器限速 - {', '.join(current_downloaders)}，下载速度限制为 {current_downloaderSpeedLimit} KiB/s，因正在移动或复制文件{file_item.path}"
                 self._apply_downloader_speed_limit(log_message)
             else:
-                if self._downloaderSpeedLimit == 0:
+                if current_downloaderSpeedLimit == 0:
                     log_msg = "下载速度限制为0或为空，默认关闭限速"
                 elif target_dir.transfer_type not in [
                     "move",
@@ -2030,7 +2046,11 @@ class autoTransfer(_PluginBase):
         """
         恢复下载器限速
         """
-        if self._downloaders_limit_enabled and self.get_data(
+        # 实时获取最新配置，使配置更新立即生效
+        current_config = self.get_config()
+        current_downloaders_limit_enabled = current_config.get("downloaders_limit_enabled", False)
+        
+        if current_downloaders_limit_enabled and self.get_data(
             key="is_download_speed_limited"
         ):
             try:
