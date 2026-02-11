@@ -51,7 +51,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.46"
+    plugin_version = "1.0.47"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -485,6 +485,10 @@ class autoTransfer(_PluginBase):
                 key="plugin_state_time",
                 value=str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
+        
+        # 清理进度数据
+        if value in ["finished", "failed"]:
+            self.del_data(key="transfer_progress")
 
     def __runResetPlunindata(self):
         """
@@ -549,8 +553,17 @@ class autoTransfer(_PluginBase):
             logger.info(f"插件{self.plugin_name} v{self.plugin_version} 开始运行")
 
             # 遍历所有目录
-            for idx, mon_path in enumerate(self._dirconf.keys(), start=1):
-                logger.info(f"开始处理目录({idx}/{len(self._dirconf)}): {mon_path} ...")
+            total_dirs = len(self._dirconf)
+            for dir_idx, mon_path in enumerate(self._dirconf.keys(), start=1):
+                logger.info(f"开始处理目录({dir_idx}/{total_dirs}): {mon_path} ...")
+                
+                # 保存目录处理进度
+                self.save_data(key="transfer_progress", value={
+                    "status": "processing_dir",
+                    "dir_idx": dir_idx,
+                    "total_dirs": total_dirs,
+                    "current_dir": mon_path
+                })
                 
                 # 获取文件列表
                 list_files = SystemUtils.list_files(
@@ -567,12 +580,25 @@ class autoTransfer(_PluginBase):
                 
                 logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
                 unique_items = {}
+                total_files = len(list_files)
 
                 # 遍历目录下所有文件
-                for idx, file_path in enumerate(list_files, start=1):
+                for file_idx, file_path in enumerate(list_files, start=1):
                     logger.info(
-                        f"开始处理文件({idx}/{len(list_files)}) ({file_path.stat().st_size / 2**30:.2f} GiB): {file_path}"
+                        f"开始处理文件({file_idx}/{total_files}) ({file_path.stat().st_size / 2**30:.2f} GiB): {file_path}"
                     )
+                    
+                    # 保存文件处理进度
+                    self.save_data(key="transfer_progress", value={
+                        "status": "processing_file",
+                        "dir_idx": dir_idx,
+                        "total_dirs": total_dirs,
+                        "current_dir": mon_path,
+                        "file_idx": file_idx,
+                        "total_files": total_files,
+                        "current_file": str(file_path),
+                        "file_size": file_path.stat().st_size
+                    })
 
                     transfer_result = self.__handle_file(
                         event_path=str(file_path), mon_path=mon_path
@@ -1703,6 +1729,15 @@ class autoTransfer(_PluginBase):
 
         if plugin_state == "running":
             status_label = f"插件目前正在运行，开始运行时间为 {plugin_state_time}"
+            # 获取进度信息
+            progress_data = self.get_data(key="transfer_progress")
+            if progress_data:
+                if progress_data.get("status") == "processing_dir":
+                    status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
+                elif progress_data.get("status") == "processing_file":
+                    status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
+                    file_size = progress_data.get('file_size', 0) / 2**30
+                    status_label += f"\n正在处理文件({progress_data.get('file_idx')}/{progress_data.get('total_files')}) ({file_size:.2f} GiB): {progress_data.get('current_file')}"
             alert_type = "primary"  # 运行中状态，显示为紫色
             alert_variant = "filled"  # 填充样式
         elif plugin_state == "finished":
