@@ -1751,7 +1751,16 @@ class autoTransfer(_PluginBase):
             alert_type = "error"  # 失败状态，显示为红色
             alert_variant = "filled"
         elif plugin_state == "toolong":
-            status_label = "上次运行时间长于30分钟"
+            # 计算实际运行时间
+            if plugin_state_time:
+                try:
+                    start_time = datetime.datetime.strptime(plugin_state_time, "%Y-%m-%d %H:%M:%S")
+                    run_minutes = (datetime.datetime.now() - start_time).total_seconds() / 60
+                    status_label = f"还没跑完，已连续运行时间 {run_minutes:.0f} 分钟"
+                except:
+                    status_label = "还没跑完，已连续运行时间长于30分钟"
+            else:
+                status_label = "还没跑完，已连续运行时间长于30分钟"
             alert_type = "warning"  # 黄色
             alert_variant = "filled"
         else:
