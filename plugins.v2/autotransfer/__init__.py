@@ -14,6 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.utils.system import SystemUtils
 from app.utils.string import StringUtils
 from app.schemas.types import EventType, MediaType, SystemConfigKey
+from app.core.event import eventmanager, Event
 from app.plugins import _PluginBase
 from app.modules.filemanager import FileManagerModule
 from app.log import logger
@@ -1542,7 +1543,74 @@ class autoTransfer(_PluginBase):
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        pass
+        """
+        定义远程控制命令
+        :return: 命令关键字、事件、描述、附带数据
+        """
+        return [
+            {
+                "cmd": "/start_autoTransfer",
+                "event": EventType.PluginAction,
+                "desc": "立即运行一次autoTransfer",
+                "category": "",
+                "data": {"action": "start_autoTransfer"},
+            },
+            {
+                "cmd": "/stop_autoTransfer",
+                "event": EventType.PluginAction,
+                "desc": "停止本次运行autoTransfer",
+                "category": "",
+                "data": {"action": "stop_autoTransfer"},
+            }
+        ]
+
+    @eventmanager.register(EventType.PluginAction)
+    def handle_plugin_action(self, event: Event = None):
+        """
+        处理插件动作事件
+        :param event: 事件对象
+        """
+        if event:
+            event_data = event.event_data
+            if not event_data:
+                return
+            
+            action = event_data.get("action")
+            
+            if action == "start_autoTransfer":
+                logger.info("收到立即运行一次命令")
+                self._start_autoTransfer()
+            elif action == "stop_autoTransfer":
+                logger.info("收到停止本次运行命令")
+                self._stop_autoTransfer()
+
+    def _start_autoTransfer(self):
+        """
+        立即运行一次
+        """
+        if not self._scheduler:
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+        
+        logger.info("立即运行一次")
+        self._scheduler.add_job(
+            name="autotransfer整理文件",
+            func=self.main,
+            trigger="date",
+            run_date=datetime.datetime.now(tz=pytz.timezone(settings.TZ))
+            + datetime.timedelta(seconds=3),
+        )
+        
+        # 启动定时服务
+        if self._scheduler.get_jobs():
+            self._scheduler.print_jobs()
+            self._scheduler.start()
+
+    def _stop_autoTransfer(self):
+        """
+        停止本次运行
+        """
+        result = self.stop_transfer()
+        logger.info(result.get("message", "停止指令已发送"))
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
