@@ -675,18 +675,18 @@ class autoTransfer(_PluginBase):
         """
         return f"scrape:{scrape_path}"
 
-    def _init_scrape_status(self, scrape_path: str, mediainfo=None, file_meta=None):
+    def _init_scrape_status(self, scrape_path: str):
         """
         初始化刮削状态
         :param scrape_path: 刮削路径
-        :param mediainfo: 媒体信息
-        :param file_meta: 文件元数据
         """
         scrape_key = self._get_scrape_key(scrape_path)
         
-        # 将 Pydantic 模型转换为字典
-        mediainfo_dict = mediainfo.dict() if hasattr(mediainfo, 'dict') else mediainfo
-        file_meta_dict = file_meta.dict() if hasattr(file_meta, 'dict') else file_meta
+        # 检查是否已存在
+        existing_status = self.get_data(key=scrape_key)
+        if existing_status:
+            logger.debug(f"刮削状态已存在: {scrape_path}")
+            return
         
         self.save_data(
             key=scrape_key,
@@ -696,9 +696,7 @@ class autoTransfer(_PluginBase):
                 "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "start_time": None,
                 "end_time": None,
-                "error_message": None,
-                "mediainfo": mediainfo_dict,
-                "file_meta": file_meta_dict
+                "error_message": None
             }
         )
 
@@ -796,28 +794,26 @@ class autoTransfer(_PluginBase):
                 # 更新刮削状态为处理中
                 self._update_scrape_status(scrape_path, "processing")
                 
-                # 获取关联信息（从字典转换为对象）
-                mediainfo_dict = scrape_status.get("mediainfo")
-                file_meta_dict = scrape_status.get("file_meta")
-                
                 logger.info(f"重新处理刮削路径: {scrape_path}")
                 
-                # 真正发送刮削请求
-                if mediainfo_dict and file_meta_dict:
-                    # 将字典转换回 MediaInfo 和 MetaInfo 对象
-                    from app.core.context import MediaInfo
-                    from app.schemas.context import MetaInfo
-                    
-                    mediainfo = MediaInfo(**mediainfo_dict) if isinstance(mediainfo_dict, dict) else mediainfo_dict
-                    file_meta = MetaInfo(**file_meta_dict) if isinstance(file_meta_dict, dict) else file_meta_dict
-                    
-                    self.mediaChain.scrape_metadata(
-                        fileitem=Path(scrape_path),
-                        meta=file_meta,
-                        mediainfo=mediainfo,
-                    )
-                else:
-                    logger.warning(f"刮削路径 {scrape_path} 缺少关联信息，无法重新刮削")
+                # 重新获取 mediainfo 和 file_meta（通过重新识别媒体）
+                try:
+                    # 获取文件元数据
+                    file_meta = self.chainbase.get_file_item(Path(scrape_path))
+                    if file_meta:
+                        # 识别媒体信息
+                        mediainfo = self.chain.recognize_media(meta=file_meta)
+                        
+                        # 发送刮削请求
+                        self.mediaChain.scrape_metadata(
+                            fileitem=Path(scrape_path),
+                            meta=file_meta,
+                            mediainfo=mediainfo,
+                        )
+                    else:
+                        logger.warning(f"无法获取文件元数据: {scrape_path}")
+                except Exception as e:
+                    logger.warning(f"重新识别媒体信息失败: {scrape_path}, {e}")
                 
                 # 发送刮削请求后立即标记为完成
                 self._update_scrape_status(scrape_path, "completed")
@@ -990,8 +986,8 @@ class autoTransfer(_PluginBase):
                         unique_key = Path(transferinfo.target_diritem.path)
                         scrape_path = str(unique_key)
 
-                        # 初始化刮削状态（传入关联信息）
-                        self._init_scrape_status(scrape_path, mediainfo, file_meta)
+                        # 初始化刮削状态
+                        self._init_scrape_status(scrape_path)
 
                         # 存储不重复的项
                         if unique_key not in unique_items:
