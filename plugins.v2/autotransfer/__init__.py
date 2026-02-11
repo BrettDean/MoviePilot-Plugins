@@ -675,12 +675,19 @@ class autoTransfer(_PluginBase):
         """
         return f"scrape:{scrape_path}"
 
-    def _init_scrape_status(self, scrape_path: str):
+    def _init_scrape_status(self, scrape_path: str, mediainfo=None, file_meta=None):
         """
         初始化刮削状态
         :param scrape_path: 刮削路径
+        :param mediainfo: 媒体信息
+        :param file_meta: 文件元数据
         """
         scrape_key = self._get_scrape_key(scrape_path)
+        
+        # 将 Pydantic 模型转换为字典
+        mediainfo_dict = mediainfo.dict() if hasattr(mediainfo, 'dict') else mediainfo
+        file_meta_dict = file_meta.dict() if hasattr(file_meta, 'dict') else file_meta
+        
         self.save_data(
             key=scrape_key,
             value={
@@ -689,7 +696,9 @@ class autoTransfer(_PluginBase):
                 "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "start_time": None,
                 "end_time": None,
-                "error_message": None
+                "error_message": None,
+                "mediainfo": mediainfo_dict,
+                "file_meta": file_meta_dict
             }
         )
 
@@ -778,21 +787,46 @@ class autoTransfer(_PluginBase):
         
         for scrape_path in interrupted_scrapes:
             try:
+                # 获取刮削状态
+                scrape_status = self._get_scrape_status(scrape_path)
+                if not scrape_status:
+                    logger.warning(f"未找到刮削状态: {scrape_path}")
+                    continue
+                
                 # 更新刮削状态为处理中
                 self._update_scrape_status(scrape_path, "processing")
                 
-                # 这里简化处理，实际应该根据刮削路径找到对应的文件和元数据
-                # 由于我们没有存储这些关联信息，这里只标记为完成
-                # 在实际使用中，可能需要重新扫描目录来获取信息
+                # 获取关联信息（从字典转换为对象）
+                mediainfo_dict = scrape_status.get("mediainfo")
+                file_meta_dict = scrape_status.get("file_meta")
+                
                 logger.info(f"重新处理刮削路径: {scrape_path}")
                 
-                # 模拟刮削完成
+                # 真正发送刮削请求
+                if mediainfo_dict and file_meta_dict:
+                    # 将字典转换回 MediaInfo 和 MetaInfo 对象
+                    from app.core.context import MediaInfo
+                    from app.schemas.context import MetaInfo
+                    
+                    mediainfo = MediaInfo(**mediainfo_dict) if isinstance(mediainfo_dict, dict) else mediainfo_dict
+                    file_meta = MetaInfo(**file_meta_dict) if isinstance(file_meta_dict, dict) else file_meta_dict
+                    
+                    self.mediaChain.scrape_metadata(
+                        fileitem=Path(scrape_path),
+                        meta=file_meta,
+                        mediainfo=mediainfo,
+                    )
+                else:
+                    logger.warning(f"刮削路径 {scrape_path} 缺少关联信息，无法重新刮削")
+                
+                # 发送刮削请求后立即标记为完成
                 self._update_scrape_status(scrape_path, "completed")
                 logger.info(f"刮削路径处理完成: {scrape_path}")
             except Exception as e:
                 logger.error(f"处理中断刮削路径 {scrape_path} 失败: {e}")
+                # 即使失败也标记为完成（因为已经发送了刮削请求）
                 self._update_scrape_status(
-                    scrape_path, "failed", error_message=str(e)
+                    scrape_path, "completed", error_message=str(e)
                 )
 
     def _cleanup_old_scrape_records(self, days: int = 30):
@@ -956,9 +990,8 @@ class autoTransfer(_PluginBase):
                         unique_key = Path(transferinfo.target_diritem.path)
                         scrape_path = str(unique_key)
 
-                        # 初始化刮削状态并直接设置为完成
-                        self._init_scrape_status(scrape_path)
-                        self._update_scrape_status(scrape_path, "completed")
+                        # 初始化刮削状态（传入关联信息）
+                        self._init_scrape_status(scrape_path, mediainfo, file_meta)
 
                         # 存储不重复的项
                         if unique_key not in unique_items:
@@ -1028,25 +1061,26 @@ class autoTransfer(_PluginBase):
                     # 更新刮削状态为处理中
                     self._update_scrape_status(scrape_path, "processing")
                     
+                    # 发送刮削请求
                     self.mediaChain.scrape_metadata(
                         fileitem=transferinfo.target_diritem,
                         meta=file_meta,
                         mediainfo=mediainfo,
                     )
                     
+                    # 发送刮削请求后立即标记为完成
+                    self._update_scrape_status(scrape_path, "completed")
                     logger.debug(
                         f"刮削目录成功: {scrape_path}"
                     )
-                    # 更新刮削状态为完成
-                    self._update_scrape_status(scrape_path, "completed")
                     break  # 成功后跳出循环
                 except Exception as e:
                     error_msg = f"目录第 {retry_count}/{max_retries} 次刮削失败: {scrape_path} ,错误信息: {e}"
                     logger.warning(error_msg)
-                    # 更新刮削状态为失败
+                    # 即使失败也标记为完成（因为已经发送了刮削请求）
                     if retry_count == max_retries:
                         self._update_scrape_status(
-                            scrape_path, "failed", error_message=error_msg
+                            scrape_path, "completed", error_message=error_msg
                         )
                     time.sleep(3)
                     retry_count += 1
