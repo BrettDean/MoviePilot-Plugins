@@ -703,14 +703,29 @@ class autoTransfer(_PluginBase):
         scrape_key = self._get_scrape_key(scrape_path)
         scrape_status = self.get_data(key=scrape_key)
         
-        if scrape_status:
+        # 如果状态不存在，创建新的状态记录
+        if not scrape_status:
+            scrape_status = {
+                "status": status,
+                "scrape_path": scrape_path,
+                "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "start_time": None,
+                "end_time": None,
+                "error_message": None
+            }
+        else:
+            # 更新现有状态
             scrape_status["status"] = status
             scrape_status.update(kwargs)
-            if status == "processing" and not kwargs.get("start_time"):
-                scrape_status["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if status in ["completed", "failed"] and not kwargs.get("end_time"):
-                scrape_status["end_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.save_data(key=scrape_key, value=scrape_status)
+        
+        # 设置时间戳
+        if status == "processing" and not kwargs.get("start_time"):
+            scrape_status["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if status in ["completed", "failed"] and not kwargs.get("end_time"):
+            scrape_status["end_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 保存状态
+        self.save_data(key=scrape_key, value=scrape_status)
 
     def _get_scrape_status(self, scrape_path: str) -> Optional[Dict]:
         """
@@ -941,8 +956,9 @@ class autoTransfer(_PluginBase):
                         unique_key = Path(transferinfo.target_diritem.path)
                         scrape_path = str(unique_key)
 
-                        # 初始化刮削状态
+                        # 初始化刮削状态并直接设置为完成
                         self._init_scrape_status(scrape_path)
+                        self._update_scrape_status(scrape_path, "completed")
 
                         # 存储不重复的项
                         if unique_key not in unique_items:
