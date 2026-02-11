@@ -486,9 +486,22 @@ class autoTransfer(_PluginBase):
                 value=str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
         
-        # 清理进度数据
-        if value in ["finished", "failed"]:
+        # 处理进度数据
+        if value == "finished":
+            # 正常完成，清理进度数据
+            self._cleanup_progress()
+        elif value == "failed":
+            # 失败，保留进度数据以便下次恢复
+            progress_state = self._get_progress()
+            if progress_state:
+                self._update_progress(status="failed")
             self.del_data(key="transfer_progress")
+        elif value == "toolong":
+            # 运行时间过长，保留进度数据
+            pass
+        elif value == "running":
+            # 开始运行，初始化进度
+            pass
 
     def __runResetPlunindata(self):
         """
@@ -498,6 +511,60 @@ class autoTransfer(_PluginBase):
         self.del_data(key="plugin_state_time")
         self.del_data(key="download_limit_current_val")
         self.del_data(key="is_download_speed_limited")
+        self.del_data(key="transfer_progress")
+        self.del_data(key="transfer_progress_state")
+
+    def _init_progress(self):
+        """
+        初始化进度记录
+        """
+        # 检查是否存在未完成的进度
+        existing_progress = self.get_data(key="transfer_progress_state")
+        if existing_progress and existing_progress.get("status") == "running":
+            logger.info("发现未完成的进度记录，将从中恢复")
+            return existing_progress
+        
+        # 创建新的进度记录
+        progress_state = {
+            "status": "running",
+            "total_dirs": len(self._dirconf),
+            "current_dir_idx": 0,
+            "completed_dirs": [],
+            "current_files": {},  # 存储每个目录的文件处理进度
+            "completed_files": [],
+            "completed_scrapes": [],
+            "start_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.save_data(key="transfer_progress_state", value=progress_state)
+        logger.info("初始化新的进度记录")
+        return progress_state
+
+    def _update_progress(self, **kwargs):
+        """
+        更新进度记录
+        """
+        progress_state = self.get_data(key="transfer_progress_state")
+        if not progress_state:
+            progress_state = self._init_progress()
+        
+        # 更新进度信息
+        progress_state.update(kwargs)
+        self.save_data(key="transfer_progress_state", value=progress_state)
+        logger.debug(f"更新进度: {progress_state}")
+
+    def _get_progress(self):
+        """
+        获取进度记录
+        """
+        return self.get_data(key="transfer_progress_state")
+
+    def _cleanup_progress(self):
+        """
+        清理进度记录
+        """
+        self.del_data(key="transfer_progress_state")
+        self.del_data(key="transfer_progress")
+        logger.info("清理进度记录")
 
     @property
     def service_infos(self) -> Optional[Dict[str, ServiceInfo]]:
@@ -552,12 +619,32 @@ class autoTransfer(_PluginBase):
 
             logger.info(f"插件{self.plugin_name} v{self.plugin_version} 开始运行")
 
+            # 初始化进度
+            progress_state = self._init_progress()
+            completed_dirs = progress_state.get("completed_dirs", [])
+            current_dir_idx = progress_state.get("current_dir_idx", 0)
+
             # 遍历所有目录
             total_dirs = len(self._dirconf)
-            for dir_idx, mon_path in enumerate(self._dirconf.keys(), start=1):
+            dirs = list(self._dirconf.keys())
+            
+            # 从上次的进度点开始
+            for dir_idx, mon_path in enumerate(dirs[current_dir_idx:], start=current_dir_idx + 1):
+                # 跳过已完成的目录
+                if mon_path in completed_dirs:
+                    logger.info(f"目录 {mon_path} 已处理完成，跳过")
+                    continue
+                
                 logger.info(f"开始处理目录({dir_idx}/{total_dirs}): {mon_path} ...")
                 
-                # 保存目录处理进度
+                # 更新目录处理进度
+                self._update_progress(
+                    current_dir_idx=dir_idx - 1,
+                    current_dir=mon_path,
+                    status="processing_dir"
+                )
+                
+                # 保存目录处理进度（用于状态显示）
                 self.save_data(key="transfer_progress", value={
                     "status": "processing_dir",
                     "dir_idx": dir_idx,
@@ -581,14 +668,34 @@ class autoTransfer(_PluginBase):
                 logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
                 unique_items = {}
                 total_files = len(list_files)
-
+                
+                # 获取当前目录的文件处理进度
+                current_files = progress_state.get("current_files", {})
+                dir_file_progress = current_files.get(mon_path, {})
+                completed_files = progress_state.get("completed_files", [])
+                
                 # 遍历目录下所有文件
                 for file_idx, file_path in enumerate(list_files, start=1):
+                    # 跳过已完成的文件
+                    if str(file_path) in completed_files:
+                        logger.debug(f"文件 {file_path} 已处理完成，跳过")
+                        continue
+                    
                     logger.info(
                         f"开始处理文件({file_idx}/{total_files}) ({file_path.stat().st_size / 2**30:.2f} GiB): {file_path}"
                     )
                     
-                    # 保存文件处理进度
+                    # 更新文件处理进度
+                    dir_file_progress["current_file_idx"] = file_idx
+                    dir_file_progress["total_files"] = total_files
+                    dir_file_progress["current_file"] = str(file_path)
+                    current_files[mon_path] = dir_file_progress
+                    self._update_progress(
+                        current_files=current_files,
+                        status="processing_file"
+                    )
+                    
+                    # 保存文件处理进度（用于状态显示）
                     self.save_data(key="transfer_progress", value={
                         "status": "processing_file",
                         "dir_idx": dir_idx,
@@ -614,24 +721,43 @@ class autoTransfer(_PluginBase):
                     # 存储不重复的项
                     if unique_key not in unique_items:
                         unique_items[unique_key] = (transferinfo, mediainfo, file_meta)
+                    
+                    # 标记文件为已完成
+                    completed_files.append(str(file_path))
+                    self._update_progress(completed_files=completed_files)
 
                 # 批量处理刮削
                 if self._scrape and unique_items:
+                    logger.info(f"开始处理刮削，共 {len(unique_items)} 个目录需要刮削")
                     self._batch_scrape(unique_items.values())
+                    # 标记刮削为已完成
+                    scrape_dirs = [str(key) for key in unique_items.keys()]
+                    completed_scrapes = progress_state.get("completed_scrapes", [])
+                    completed_scrapes.extend(scrape_dirs)
+                    self._update_progress(completed_scrapes=completed_scrapes)
 
                 # 批量处理媒体库刷新
                 if self._refresh and unique_items:
                     self._batch_refresh_media(unique_items.values())
                 elif self._refresh_modified and unique_items:
                     self._batch_refresh_media_modified(unique_items.values())
+                
+                # 标记目录为已完成
+                completed_dirs.append(mon_path)
+                self._update_progress(
+                    completed_dirs=completed_dirs,
+                    current_dir_idx=dir_idx
+                )
 
             logger.info("目录内所有文件整理完成！")
+            self._cleanup_progress()
             self.__update_plugin_state("finished")
 
         except Exception as e:
             logger.error(
                 f"插件{self.plugin_name} V{self.plugin_version} 运行失败，错误信息:{e}，traceback={traceback.format_exc()}"
             )
+            # 保留进度记录以便下次恢复
             self.__update_plugin_state("failed")
             
     def _batch_scrape(self, items):
