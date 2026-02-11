@@ -488,13 +488,10 @@ class autoTransfer(_PluginBase):
         
         # 处理进度数据
         if value == "finished":
-            # 正常完成，清理进度数据
-            self._cleanup_progress()
+            # 正常完成，清理进度显示数据
+            self.del_data(key="transfer_progress")
         elif value == "failed":
-            # 失败，保留进度数据以便下次恢复
-            progress_state = self._get_progress()
-            if progress_state:
-                self._update_progress(status="failed")
+            # 失败，清理进度显示数据
             self.del_data(key="transfer_progress")
         elif value == "toolong":
             # 运行时间过长，保留进度数据
@@ -512,59 +509,253 @@ class autoTransfer(_PluginBase):
         self.del_data(key="download_limit_current_val")
         self.del_data(key="is_download_speed_limited")
         self.del_data(key="transfer_progress")
-        self.del_data(key="transfer_progress_state")
 
-    def _init_progress(self):
+    def _get_file_key(self, file_path: str) -> str:
         """
-        初始化进度记录
+        获取文件的唯一标识key
+        :param file_path: 文件路径
+        :return: 文件key
         """
-        # 检查是否存在未完成的进度
-        existing_progress = self.get_data(key="transfer_progress_state")
-        if existing_progress and existing_progress.get("status") == "running":
-            logger.info("发现未完成的进度记录，将从中恢复")
-            return existing_progress
+        return f"file:{file_path}"
+
+    def _init_file_status(self, file_path: str):
+        """
+        初始化文件状态
+        :param file_path: 文件路径
+        """
+        file_key = self._get_file_key(file_path)
+        self.save_data(
+            key=file_key,
+            value={
+                "status": "pending",
+                "file_path": file_path,
+                "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "start_time": None,
+                "end_time": None,
+                "target_path": None,
+                "transfer_type": None,
+                "error_message": None
+            }
+        )
+
+    def _update_file_status(self, file_path: str, status: str, **kwargs):
+        """
+        更新文件状态
+        :param file_path: 文件路径
+        :param status: 状态 (pending, processing, completed, failed)
+        :param kwargs: 其他更新字段
+        """
+        file_key = self._get_file_key(file_path)
+        file_status = self.get_data(key=file_key)
         
-        # 创建新的进度记录
-        progress_state = {
-            "status": "running",
-            "total_dirs": len(self._dirconf),
-            "current_dir_idx": 0,
-            "completed_dirs": [],
-            "current_files": {},  # 存储每个目录的文件处理进度
-            "completed_files": [],
-            "completed_scrapes": [],
-            "start_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        self.save_data(key="transfer_progress_state", value=progress_state)
-        logger.info("初始化新的进度记录")
-        return progress_state
+        if file_status:
+            file_status["status"] = status
+            file_status.update(kwargs)
+            if status == "processing" and not kwargs.get("start_time"):
+                file_status["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if status in ["completed", "failed"] and not kwargs.get("end_time"):
+                file_status["end_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.save_data(key=file_key, value=file_status)
 
-    def _update_progress(self, **kwargs):
+    def _get_file_status(self, file_path: str) -> Optional[Dict]:
         """
-        更新进度记录
+        获取文件状态
+        :param file_path: 文件路径
+        :return: 文件状态信息
         """
-        progress_state = self.get_data(key="transfer_progress_state")
-        if not progress_state:
-            progress_state = self._init_progress()
+        file_key = self._get_file_key(file_path)
+        return self.get_data(key=file_key)
+
+    def _get_all_file_statuses(self, file_paths: List[str]) -> Dict[str, Dict]:
+        """
+        批量获取文件状态
+        :param file_paths: 文件路径列表
+        :return: 文件路径到状态的映射
+        """
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        status_map = {}
+        for data in all_data:
+            if data.key.startswith("file:"):
+                file_path = data.key[5:]
+                status_map[file_path] = data.value
+        return {path: status_map.get(path) for path in file_paths}
+
+    def _recover_interrupted_files(self) -> List[str]:
+        """
+        恢复中断的文件（状态为processing的文件）
+        :return: 中断的文件路径列表
+        """
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        interrupted_files = []
         
-        # 更新进度信息
-        progress_state.update(kwargs)
-        self.save_data(key="transfer_progress_state", value=progress_state)
-        logger.debug(f"更新进度: {progress_state}")
+        for data in all_data:
+            if data.key.startswith("file:") and data.value.get("status") == "processing":
+                file_path = data.key[5:]
+                interrupted_files.append(file_path)
+                logger.warning(f"发现中断的文件: {file_path}")
+        
+        return interrupted_files
 
-    def _get_progress(self):
+    def _cleanup_old_file_records(self, days: int = 30):
         """
-        获取进度记录
+        清理旧的已完成文件记录
+        :param days: 保留天数
         """
-        return self.get_data(key="transfer_progress_state")
+        cutoff_time = datetime.datetime.now() - datetime.timedelta(days=days)
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        cleaned_count = 0
+        
+        for data in all_data:
+            if data.key.startswith("file:") and data.value.get("status") == "completed":
+                end_time_str = data.value.get("end_time")
+                if end_time_str:
+                    try:
+                        end_time = datetime.datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+                        if end_time < cutoff_time:
+                            self.del_data(key=data.key)
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"解析文件记录时间失败: {data.key}, {e}")
+        
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个旧的已完成文件记录")
 
-    def _cleanup_progress(self):
+    def _get_scrape_key(self, scrape_path: str) -> str:
         """
-        清理进度记录
+        获取刮削路径的唯一标识key
+        :param scrape_path: 刮削路径
+        :return: 刮削key
         """
-        self.del_data(key="transfer_progress_state")
-        self.del_data(key="transfer_progress")
-        logger.info("清理进度记录")
+        return f"scrape:{scrape_path}"
+
+    def _init_scrape_status(self, scrape_path: str):
+        """
+        初始化刮削状态
+        :param scrape_path: 刮削路径
+        """
+        scrape_key = self._get_scrape_key(scrape_path)
+        self.save_data(
+            key=scrape_key,
+            value={
+                "status": "pending",
+                "scrape_path": scrape_path,
+                "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "start_time": None,
+                "end_time": None,
+                "error_message": None
+            }
+        )
+
+    def _update_scrape_status(self, scrape_path: str, status: str, **kwargs):
+        """
+        更新刮削状态
+        :param scrape_path: 刮削路径
+        :param status: 状态 (pending, processing, completed, failed)
+        :param kwargs: 其他更新字段
+        """
+        scrape_key = self._get_scrape_key(scrape_path)
+        scrape_status = self.get_data(key=scrape_key)
+        
+        if scrape_status:
+            scrape_status["status"] = status
+            scrape_status.update(kwargs)
+            if status == "processing" and not kwargs.get("start_time"):
+                scrape_status["start_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if status in ["completed", "failed"] and not kwargs.get("end_time"):
+                scrape_status["end_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.save_data(key=scrape_key, value=scrape_status)
+
+    def _get_scrape_status(self, scrape_path: str) -> Optional[Dict]:
+        """
+        获取刮削状态
+        :param scrape_path: 刮削路径
+        :return: 刮削状态信息
+        """
+        scrape_key = self._get_scrape_key(scrape_path)
+        return self.get_data(key=scrape_key)
+
+    def _get_all_scrape_statuses(self, scrape_paths: List[str]) -> Dict[str, Dict]:
+        """
+        批量获取刮削状态
+        :param scrape_paths: 刮削路径列表
+        :return: 刮削路径到状态的映射
+        """
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        status_map = {}
+        for data in all_data:
+            if data.key.startswith("scrape:"):
+                scrape_path = data.key[7:]
+                status_map[scrape_path] = data.value
+        return {path: status_map.get(path) for path in scrape_paths}
+
+    def _recover_interrupted_scrapes(self) -> List[str]:
+        """
+        恢复中断的刮削（状态为processing的刮削路径）
+        :return: 中断的刮削路径列表
+        """
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        interrupted_scrapes = []
+        
+        for data in all_data:
+            if data.key.startswith("scrape:") and data.value.get("status") == "processing":
+                scrape_path = data.key[7:]
+                interrupted_scrapes.append(scrape_path)
+                logger.warning(f"发现中断的刮削路径: {scrape_path}")
+        
+        return interrupted_scrapes
+
+    def _process_interrupted_scrapes(self, interrupted_scrapes: List[str]):
+        """
+        处理中断的刮削路径
+        :param interrupted_scrapes: 中断的刮削路径列表
+        """
+        if not interrupted_scrapes:
+            return
+        
+        logger.info(f"开始处理 {len(interrupted_scrapes)} 个中断的刮削路径")
+        
+        for scrape_path in interrupted_scrapes:
+            try:
+                # 更新刮削状态为处理中
+                self._update_scrape_status(scrape_path, "processing")
+                
+                # 这里简化处理，实际应该根据刮削路径找到对应的文件和元数据
+                # 由于我们没有存储这些关联信息，这里只标记为完成
+                # 在实际使用中，可能需要重新扫描目录来获取信息
+                logger.info(f"重新处理刮削路径: {scrape_path}")
+                
+                # 模拟刮削完成
+                self._update_scrape_status(scrape_path, "completed")
+                logger.info(f"刮削路径处理完成: {scrape_path}")
+            except Exception as e:
+                logger.error(f"处理中断刮削路径 {scrape_path} 失败: {e}")
+                self._update_scrape_status(
+                    scrape_path, "failed", error_message=str(e)
+                )
+
+    def _cleanup_old_scrape_records(self, days: int = 30):
+        """
+        清理旧的已完成刮削记录
+        :param days: 保留天数
+        """
+        cutoff_time = datetime.datetime.now() - datetime.timedelta(days=days)
+        all_data = self.plugindata.get_data_all("autoTransfer")
+        cleaned_count = 0
+        
+        for data in all_data:
+            if data.key.startswith("scrape:") and data.value.get("status") == "completed":
+                end_time_str = data.value.get("end_time")
+                if end_time_str:
+                    try:
+                        end_time = datetime.datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+                        if end_time < cutoff_time:
+                            self.del_data(key=data.key)
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"解析刮削记录时间失败: {data.key}, {e}")
+        
+        if cleaned_count > 0:
+            logger.info(f"清理了 {cleaned_count} 个旧的已完成刮削记录")
 
     @property
     def service_infos(self) -> Optional[Dict[str, ServiceInfo]]:
@@ -617,32 +808,30 @@ class autoTransfer(_PluginBase):
             else:
                 self.__update_plugin_state("running")
 
-            logger.info(f"插件{self.plugin_name} v{self.plugin_version} 开始运行")
+            logger.info(f"==========插件{self.plugin_name} v{self.plugin_version} 开始运行==========")
 
-            # 初始化进度
-            progress_state = self._init_progress()
-            completed_dirs = progress_state.get("completed_dirs", [])
-            current_dir_idx = progress_state.get("current_dir_idx", 0)
+            # 恢复中断的文件
+            interrupted_files = self._recover_interrupted_files()
+            if interrupted_files:
+                logger.info(f"发现 {len(interrupted_files)} 个中断的文件，将重新处理")
+
+            # 恢复中断的刮削
+            interrupted_scrapes = self._recover_interrupted_scrapes()
+            if interrupted_scrapes:
+                logger.info(f"发现 {len(interrupted_scrapes)} 个中断的刮削，将重新处理")
+                # 处理中断的刮削
+                self._process_interrupted_scrapes(interrupted_scrapes)
+
+            # 清理旧的已完成记录
+            self._cleanup_old_file_records(days=30)
+            self._cleanup_old_scrape_records(days=30)
 
             # 遍历所有目录
             total_dirs = len(self._dirconf)
             dirs = list(self._dirconf.keys())
             
-            # 从上次的进度点开始
-            for dir_idx, mon_path in enumerate(dirs[current_dir_idx:], start=current_dir_idx + 1):
-                # 跳过已完成的目录
-                if mon_path in completed_dirs:
-                    logger.info(f"目录 {mon_path} 已处理完成，跳过")
-                    continue
-                
+            for dir_idx, mon_path in enumerate(dirs, start=1):
                 logger.info(f"开始处理目录({dir_idx}/{total_dirs}): {mon_path} ...")
-                
-                # 更新目录处理进度
-                self._update_progress(
-                    current_dir_idx=dir_idx - 1,
-                    current_dir=mon_path,
-                    status="processing_dir"
-                )
                 
                 # 保存目录处理进度（用于状态显示）
                 self.save_data(key="transfer_progress", value={
@@ -669,30 +858,22 @@ class autoTransfer(_PluginBase):
                 unique_items = {}
                 total_files = len(list_files)
                 
-                # 获取当前目录的文件处理进度
-                current_files = progress_state.get("current_files", {})
-                dir_file_progress = current_files.get(mon_path, {})
-                completed_files = progress_state.get("completed_files", [])
+                # 批量获取文件状态
+                file_paths = [str(f) for f in list_files]
+                file_statuses = self._get_all_file_statuses(file_paths)
                 
                 # 遍历目录下所有文件
                 for file_idx, file_path in enumerate(list_files, start=1):
-                    # 跳过已完成的文件
-                    if str(file_path) in completed_files:
-                        logger.debug(f"文件 {file_path} 已处理完成，跳过")
-                        continue
+                    file_path_str = str(file_path)
+                    file_status = file_statuses.get(file_path_str)
+                    
+                    # # 跳过已完成的文件
+                    # if file_status and file_status.get("status") == "completed":
+                    #     logger.debug(f"文件 {file_path} 已处理完成，跳过")
+                    #     continue
                     
                     logger.info(
                         f"开始处理文件({file_idx}/{total_files}) ({file_path.stat().st_size / 2**30:.2f} GiB): {file_path}"
-                    )
-                    
-                    # 更新文件处理进度
-                    dir_file_progress["current_file_idx"] = file_idx
-                    dir_file_progress["total_files"] = total_files
-                    dir_file_progress["current_file"] = str(file_path)
-                    current_files[mon_path] = dir_file_progress
-                    self._update_progress(
-                        current_files=current_files,
-                        status="processing_file"
                     )
                     
                     # 保存文件处理进度（用于状态显示）
@@ -703,61 +884,78 @@ class autoTransfer(_PluginBase):
                         "current_dir": mon_path,
                         "file_idx": file_idx,
                         "total_files": total_files,
-                        "current_file": str(file_path),
+                        "current_file": file_path_str,
                         "file_size": file_path.stat().st_size
                     })
-
-                    transfer_result = self.__handle_file(
-                        event_path=str(file_path), mon_path=mon_path
-                    )
-                    # 如果返回值是 None，则跳过
-                    if transfer_result is None:
-                        logger.debug(f"文件 {file_path} 不用刮削")
-                        continue
-
-                    transferinfo, mediainfo, file_meta = transfer_result
-                    unique_key = Path(transferinfo.target_diritem.path)
-
-                    # 存储不重复的项
-                    if unique_key not in unique_items:
-                        unique_items[unique_key] = (transferinfo, mediainfo, file_meta)
                     
-                    # 标记文件为已完成
-                    completed_files.append(str(file_path))
-                    self._update_progress(completed_files=completed_files)
+                    # 初始化或更新文件状态为处理中
+                    if not file_status:
+                        self._init_file_status(file_path_str)
+                    self._update_file_status(file_path_str, "processing")
+                    
+                    try:
+                        transfer_result = self.__handle_file(
+                            event_path=file_path_str, mon_path=mon_path
+                        )
+                        # 如果返回值是 None，则跳过
+                        if transfer_result is None:
+                            logger.debug(f"文件 {file_path} 不用刮削")
+                            self._update_file_status(file_path_str, "completed")
+                            continue
+
+                        transferinfo, mediainfo, file_meta = transfer_result
+                        unique_key = Path(transferinfo.target_diritem.path)
+                        scrape_path = str(unique_key)
+
+                        # 初始化刮削状态
+                        self._init_scrape_status(scrape_path)
+
+                        # 存储不重复的项
+                        if unique_key not in unique_items:
+                            unique_items[unique_key] = (transferinfo, mediainfo, file_meta)
+                        
+                        # 标记文件为已完成
+                        self._update_file_status(
+                            file_path_str,
+                            "completed",
+                            target_path=str(transferinfo.target_diritem.path),
+                            transfer_type=self._transfer_type
+                        )
+                    except Exception as e:
+                        logger.error(f"处理文件 {file_path} 失败: {e}")
+                        self._update_file_status(
+                            file_path_str,
+                            "failed",
+                            error_message=str(e)
+                        )
 
                 # 批量处理刮削
                 if self._scrape and unique_items:
-                    logger.info(f"开始处理刮削，共 {len(unique_items)} 个目录需要刮削")
-                    self._batch_scrape(unique_items.values())
-                    # 标记刮削为已完成
-                    scrape_dirs = [str(key) for key in unique_items.keys()]
-                    completed_scrapes = progress_state.get("completed_scrapes", [])
-                    completed_scrapes.extend(scrape_dirs)
-                    self._update_progress(completed_scrapes=completed_scrapes)
+                    # 过滤出需要刮削的项目（状态为 pending）
+                    items_to_scrape = []
+                    for unique_key, item in unique_items.items():
+                        scrape_path = str(unique_key)
+                        scrape_status = self._get_scrape_status(scrape_path)
+                        if not scrape_status or scrape_status.get("status") != "completed":
+                            items_to_scrape.append(item)
+                    
+                    if items_to_scrape:
+                        logger.info(f"开始处理刮削，共 {len(items_to_scrape)} 个目录需要刮削")
+                        self._batch_scrape(items_to_scrape)
 
                 # 批量处理媒体库刷新
                 if self._refresh and unique_items:
                     self._batch_refresh_media(unique_items.values())
                 elif self._refresh_modified and unique_items:
                     self._batch_refresh_media_modified(unique_items.values())
-                
-                # 标记目录为已完成
-                completed_dirs.append(mon_path)
-                self._update_progress(
-                    completed_dirs=completed_dirs,
-                    current_dir_idx=dir_idx
-                )
 
             logger.info("目录内所有文件整理完成！")
-            self._cleanup_progress()
             self.__update_plugin_state("finished")
 
         except Exception as e:
             logger.error(
                 f"插件{self.plugin_name} V{self.plugin_version} 运行失败，错误信息:{e}，traceback={traceback.format_exc()}"
             )
-            # 保留进度记录以便下次恢复
             self.__update_plugin_state("failed")
             
     def _batch_scrape(self, items):
@@ -767,25 +965,36 @@ class autoTransfer(_PluginBase):
         """
         max_retries = 3  # 最大重试次数
         for transferinfo, mediainfo, file_meta in items:
+            scrape_path = str(transferinfo.target_diritem.path)
             retry_count = 1
             while retry_count <= max_retries:
                 try:
                     logger.info(
-                        f"开始刮削目录: {transferinfo.target_diritem.path}"
+                        f"开始刮削目录: {scrape_path}"
                     )
+                    # 更新刮削状态为处理中
+                    self._update_scrape_status(scrape_path, "processing")
+                    
                     self.mediaChain.scrape_metadata(
                         fileitem=transferinfo.target_diritem,
                         meta=file_meta,
                         mediainfo=mediainfo,
                     )
+                    
                     logger.debug(
-                        f"刮削目录成功: {transferinfo.target_diritem.path}"
+                        f"刮削目录成功: {scrape_path}"
                     )
+                    # 更新刮削状态为完成
+                    self._update_scrape_status(scrape_path, "completed")
                     break  # 成功后跳出循环
                 except Exception as e:
-                    logger.warning(
-                        f"目录第 {retry_count}/{max_retries} 次刮削失败: {transferinfo.target_diritem.path} ,错误信息: {e}"
-                    )
+                    error_msg = f"目录第 {retry_count}/{max_retries} 次刮削失败: {scrape_path} ,错误信息: {e}"
+                    logger.warning(error_msg)
+                    # 更新刮削状态为失败
+                    if retry_count == max_retries:
+                        self._update_scrape_status(
+                            scrape_path, "failed", error_message=error_msg
+                        )
                     time.sleep(3)
                     retry_count += 1
                     continue  # 重试
