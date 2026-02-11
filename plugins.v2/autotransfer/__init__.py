@@ -6,6 +6,7 @@ import pytz
 import os
 import datetime
 import time
+import fcntl
 from typing import List, Tuple, Dict, Any, Optional
 from pathlib import Path
 from apscheduler.triggers.cron import CronTrigger
@@ -106,6 +107,8 @@ class autoTransfer(_PluginBase):
     _medias = {}
     # 退出事件
     _event = threading.Event()
+    # 文件锁文件描述符
+    _lock_fd = None
     _move_failed_files = True
     _move_excluded_files = True
 
@@ -120,6 +123,11 @@ class autoTransfer(_PluginBase):
         self.filetransfer = FileManagerModule()
         self.downloader_helper = DownloaderHelper()
         self.mediaserver_helper = MediaServerHelper()
+        # 初始化文件锁路径
+        self._lock_file_path = os.path.join(
+            settings.TEMP_PATH,
+            f"autotransfer_{self.plugin_name}.lock"
+        )
         # 清空配置
         self._dirconf = {}
         self._transferconf = {}
@@ -468,6 +476,45 @@ class autoTransfer(_PluginBase):
         # 恢复原速
         self._recover_downloader_speed_limit()
 
+    def _acquire_lock(self) -> bool:
+        """
+        获取文件锁
+        :return: 是否成功获取锁
+        """
+        try:
+            # 尝试创建并锁定文件
+            self._lock_fd = os.open(self._lock_file_path, os.O_CREAT | os.O_WRONLY)
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            logger.info(f"成功获取文件锁: {self._lock_file_path}")
+            return True
+        except BlockingIOError:
+            logger.warning(
+                f"文件锁已被占用，插件已在运行中，跳过本次运行"
+            )
+            return False
+        except Exception as e:
+            logger.error(f"获取文件锁失败: {e}")
+            return False
+
+    def _release_lock(self):
+        """
+        释放文件锁
+        """
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+                os.close(self._lock_fd)
+                self._lock_fd = None
+                logger.info(f"已释放文件锁: {self._lock_file_path}")
+            except Exception as e:
+                logger.error(f"释放文件锁失败: {e}")
+        
+        if self._lock_file_path and os.path.exists(self._lock_file_path):
+            try:
+                os.remove(self._lock_file_path)
+            except Exception as e:
+                logger.error(f"删除锁文件失败: {e}")
+
     def __update_plugin_state(self, value: str):
         """
         更新插件状态, 可能的值有:
@@ -788,25 +835,12 @@ class autoTransfer(_PluginBase):
         """
         立即运行一次
         """
+        # 尝试获取文件锁
+        if not self._acquire_lock():
+            return
+        
         try:
-            if self.get_data(key="plugin_state") == "running":
-                last_state_time = self.get_data(key="plugin_state_time")
-                # 如果上次运行在30分钟以内
-                if (
-                    last_state_time
-                    and datetime.datetime.now()
-                    - datetime.datetime.strptime(last_state_time, "%Y-%m-%d %H:%M:%S")
-                    < datetime.timedelta(minutes=30)
-                ):
-                    logger.info(
-                        f"插件{self.plugin_name} v{self.plugin_version} 上次运行未完成，跳过本次运行"
-                    )
-                    return
-                else:  # 上次运行超过30分钟还没完成, 又来了新的任务，就慢慢排队等
-                    pass
-                    self.__update_plugin_state("toolong")
-            else:
-                self.__update_plugin_state("running")
+            self.__update_plugin_state("running")
 
             logger.info(f"==========插件{self.plugin_name} v{self.plugin_version} 开始运行==========")
 
@@ -957,6 +991,9 @@ class autoTransfer(_PluginBase):
                 f"插件{self.plugin_name} V{self.plugin_version} 运行失败，错误信息:{e}，traceback={traceback.format_exc()}"
             )
             self.__update_plugin_state("failed")
+        finally:
+            # 释放文件锁
+            self._release_lock()
             
     def _batch_scrape(self, items):
         """
@@ -2873,3 +2910,6 @@ class autoTransfer(_PluginBase):
                 self._scheduler.shutdown()
                 self._event.clear()
             self._scheduler = None
+        
+        # 清理文件锁
+        self._release_lock()
