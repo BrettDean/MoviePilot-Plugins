@@ -76,6 +76,7 @@ class autoTransfer(_PluginBase):
     _enabled = False
     _notify = False
     _onlyonce = False
+    _stop_transfer = False
     _history = False
     _scrape = False
     _category = False
@@ -138,6 +139,7 @@ class autoTransfer(_PluginBase):
             self._enabled = config.get("enabled")
             self._notify = config.get("notify")
             self._onlyonce = config.get("onlyonce")
+            self._stop_transfer = config.get("stop_transfer")
             self._history = config.get("history")
             self._scrape = config.get("scrape")
             self._category = config.get("category")
@@ -256,6 +258,15 @@ class autoTransfer(_PluginBase):
                 # 保存配置
                 self.__update_config()
 
+            # 停止当前运行
+            if self._stop_transfer:
+                logger.info("停止本次运行")
+                result = self.stop_transfer()
+                # 关闭停止开关
+                self._stop_transfer = False
+                # 保存配置
+                self.__update_config()
+
             # 启动定时服务
             if self._scheduler.get_jobs():
                 self._scheduler.print_jobs()
@@ -270,6 +281,7 @@ class autoTransfer(_PluginBase):
                 "enabled": self._enabled,
                 "notify": self._notify,
                 "onlyonce": self._onlyonce,
+                "stop_transfer": self._stop_transfer,
                 "history": self._history,
                 "scrape": self._scrape,
                 "category": self._category,
@@ -546,6 +558,33 @@ class autoTransfer(_PluginBase):
         elif value == "running":
             # 开始运行，初始化进度
             pass
+        elif value == "stopped":
+            # 手动停止，清理进度显示数据
+            self.del_data(key="transfer_progress")
+
+    def _set_stop_flag(self):
+        """
+        设置停止标志
+        """
+        self.save_data(key="stop_flag", value=True)
+        logger.info("已设置停止标志，将在当前文件/刮削完成后停止")
+
+    def _check_stop_flag(self) -> bool:
+        """
+        检查是否需要停止
+        :return: 是否需要停止
+        """
+        stop_flag = self.get_data(key="stop_flag")
+        if stop_flag:
+            logger.info("检测到停止标志，将停止后续处理")
+            return True
+        return False
+
+    def _clear_stop_flag(self):
+        """
+        清除停止标志
+        """
+        self.del_data(key="stop_flag")
 
     def __runResetPlunindata(self):
         """
@@ -889,6 +928,9 @@ class autoTransfer(_PluginBase):
 
             logger.info(f"==========插件{self.plugin_name} v{self.plugin_version} 开始运行==========")
 
+            # 清除旧的停止标志
+            self._clear_stop_flag()
+
             # 恢复中断的文件
             interrupted_files = self._recover_interrupted_files()
             if interrupted_files:
@@ -910,6 +952,12 @@ class autoTransfer(_PluginBase):
             dirs = list(self._dirconf.keys())
             
             for dir_idx, mon_path in enumerate(dirs, start=1):
+                # 检查是否需要停止
+                if self._check_stop_flag():
+                    logger.info("检测到停止标志，停止目录处理")
+                    self.__update_plugin_state("stopped")
+                    break
+                
                 logger.info(f"开始处理目录({dir_idx}/{total_dirs}): {mon_path} ...")
                 
                 # 保存目录处理进度（用于状态显示）
@@ -943,6 +991,11 @@ class autoTransfer(_PluginBase):
                 
                 # 遍历目录下所有文件
                 for file_idx, file_path in enumerate(list_files, start=1):
+                    # 检查是否需要停止
+                    if self._check_stop_flag():
+                        logger.info("检测到停止标志，停止文件处理")
+                        break
+                    
                     file_path_str = str(file_path)
                     file_status = file_statuses.get(file_path_str)
                     
@@ -1011,26 +1064,43 @@ class autoTransfer(_PluginBase):
 
                 # 批量处理刮削
                 if self._scrape and unique_items:
-                    # 过滤出需要刮削的项目（状态为 pending）
-                    items_to_scrape = []
-                    for unique_key, item in unique_items.items():
-                        scrape_path = str(unique_key)
-                        scrape_status = self._get_scrape_status(scrape_path)
-                        if not scrape_status or scrape_status.get("status") != "completed":
-                            items_to_scrape.append(item)
-                    
-                    if items_to_scrape:
-                        logger.info(f"开始处理刮削，共 {len(items_to_scrape)} 个目录需要刮削")
-                        self._batch_scrape(items_to_scrape)
+                    # 检查是否需要停止
+                    if self._check_stop_flag():
+                        logger.info("检测到停止标志，跳过刮削处理")
+                    else:
+                        # 过滤出需要刮削的项目（状态为 pending）
+                        items_to_scrape = []
+                        for unique_key, item in unique_items.items():
+                            scrape_path = str(unique_key)
+                            scrape_status = self._get_scrape_status(scrape_path)
+                            if not scrape_status or scrape_status.get("status") != "completed":
+                                items_to_scrape.append(item)
+                        
+                        if items_to_scrape:
+                            logger.info(f"开始处理刮削，共 {len(items_to_scrape)} 个目录需要刮削")
+                            self._batch_scrape(items_to_scrape)
 
                 # 批量处理媒体库刷新
                 if self._refresh and unique_items:
-                    self._batch_refresh_media(unique_items.values())
+                    # 检查是否需要停止
+                    if self._check_stop_flag():
+                        logger.info("检测到停止标志，跳过媒体库刷新")
+                    else:
+                        self._batch_refresh_media(unique_items.values())
                 elif self._refresh_modified and unique_items:
-                    self._batch_refresh_media_modified(unique_items.values())
+                    # 检查是否需要停止
+                    if self._check_stop_flag():
+                        logger.info("检测到停止标志，跳过媒体库刷新")
+                    else:
+                        self._batch_refresh_media_modified(unique_items.values())
 
-            logger.info("目录内所有文件整理完成！")
-            self.__update_plugin_state("finished")
+            # 检查是否因为停止标志而停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止插件运行")
+                self.__update_plugin_state("stopped")
+            else:
+                logger.info("目录内所有文件整理完成！")
+                self.__update_plugin_state("finished")
 
         except Exception as e:
             logger.error(
@@ -1038,6 +1108,8 @@ class autoTransfer(_PluginBase):
             )
             self.__update_plugin_state("failed")
         finally:
+            # 清除停止标志
+            self._clear_stop_flag()
             # 释放文件锁
             self._release_lock()
             
@@ -1048,6 +1120,11 @@ class autoTransfer(_PluginBase):
         """
         max_retries = 3  # 最大重试次数
         for transferinfo, mediainfo, file_meta in items:
+            # 检查是否需要停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止刮削处理")
+                break
+            
             scrape_path = str(transferinfo.target_diritem.path)
             retry_count = 1
             while retry_count <= max_retries:
@@ -1089,6 +1166,11 @@ class autoTransfer(_PluginBase):
         :param items: 待刷新的项目列表
         """
         for transferinfo, mediainfo, file_meta in items:
+            # 检查是否需要停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止媒体库刷新")
+                break
+            
             try:
                 self.eventmanager.send_event(
                     EventType.TransferComplete,
@@ -1112,6 +1194,11 @@ class autoTransfer(_PluginBase):
         :param items: 待刷新的项目列表
         """
         for transferinfo, mediainfo, file_meta in items:
+            # 检查是否需要停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止媒体库刷新")
+                break
+            
             try:
                 self._refresh_lib_modified(transferinfo, mediainfo)
                 logger.info(
@@ -2339,6 +2426,21 @@ class autoTransfer(_PluginBase):
                                                     }
                                                 ],
                                             },
+                                            {
+                                                "component": "VCol",
+                                                "props": {"cols": 12, "md": 3},
+                                                "content": [
+                                                    {
+                                                        "component": "VSwitch",
+                                                        "props": {
+                                                            "model": "stop_transfer",
+                                                            "label": "停止本次运行",
+                                                            "hint": "停止当前正在运行的整理任务，当前文件/刮削会继续完成，下一个文件/刮削会留到下次运行时再处理",
+                                                            "persistent-hint": True,
+                                                        },
+                                                    }
+                                                ],
+                                            },
                                         ],
                                     }
                                 ],
@@ -2920,6 +3022,7 @@ class autoTransfer(_PluginBase):
             "enabled": False,
             "notify": False,
             "onlyonce": False,
+            "stop_transfer": False,
             "history": False,
             "scrape": False,
             "category": False,
@@ -2960,3 +3063,11 @@ class autoTransfer(_PluginBase):
         
         # 清理文件锁
         self._release_lock()
+
+    def stop_transfer(self):
+        """
+        手动停止文件整理
+        """
+        self._set_stop_flag()
+        logger.info("已发送停止指令，将在当前文件/刮削完成后停止")
+        return {"success": True, "message": "停止指令已发送，将在当前文件/刮削完成后停止"}
