@@ -3,11 +3,12 @@
     "name": "autoTransfer",
     "description": "类似v1的目录监控，可定期整理文件",
     "labels": "autoTransfer",
-    "version": "1.0.48",
+    "version": "1.0.49",
     "icon": "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png",
     "author": "Dean",
     "level": 1,
     "history": {
+      "v1.0.49": "移除停止本次运行功能及相关代码",
       "v1.0.48": "版本1.0.47到1.0.48的主要变更：1.增强刮削状态管理并支持关联信息存储 2.简化刮削状态初始化及处理逻辑 3.统一刮削路径格式，确保末尾有斜杠 4.添加手动停止文件整理功能 5.添加远程控制命令支持立即运行和停止",
       "v1.0.47": "autoTransfer代码重构",
       "v1.0.46": "autoTransfer代码重构",
