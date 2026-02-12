@@ -958,159 +958,86 @@ class autoTransfer(_PluginBase):
             self._cleanup_old_file_records(days=30)
             self._cleanup_old_scrape_records(days=30)
 
-            # 遍历所有目录
-            total_dirs = len(self._dirconf)
-            dirs = list(self._dirconf.keys())
+            # 第一阶段：扫描所有目录，按目标目录分组
+            logger.info("开始扫描所有待整理文件...")
+            target_dir_groups = self._scan_and_group_files()
             
-            for dir_idx, mon_path in enumerate(dirs, start=1):
+            if not target_dir_groups:
+                logger.info("没有发现待整理的文件")
+                self.__update_plugin_state("finished")
+                return
+
+            total_target_dirs = len(target_dir_groups)
+            logger.info(f"共发现 {total_target_dirs} 个目标目录需要处理")
+
+            # 第二阶段：对每个目标目录依次执行整理->刮削->刷新
+            for dir_idx, (target_dir, file_list) in enumerate(target_dir_groups.items(), start=1):
                 # 检查是否需要停止
                 if self._check_stop_flag():
                     logger.info("检测到停止标志，停止目录处理")
                     self.__update_plugin_state("stopped")
                     break
                 
-                logger.info(f"开始处理目录({dir_idx}/{total_dirs}): {mon_path} ...")
+                logger.info(f"开始处理目标目录({dir_idx}/{total_target_dirs}): {target_dir} ...")
                 
                 # 保存目录处理进度（用于状态显示）
                 self.save_data(key="transfer_progress", value={
                     "status": "processing_dir",
                     "dir_idx": dir_idx,
-                    "total_dirs": total_dirs,
-                    "current_dir": mon_path
+                    "total_dirs": total_target_dirs,
+                    "current_dir": target_dir
                 })
                 
-                # 获取文件列表
-                list_files = SystemUtils.list_files(
-                    directory=Path(mon_path),
-                    extensions=settings.RMT_MEDIAEXT,
-                    min_filesize=int(self._size),
-                    recursive=True,
-                )
+                # 步骤1：整理该目录下的所有文件
+                transfer_results = self._process_files_for_target_dir(target_dir, file_list)
                 
-                # 去除 .parts 文件
-                list_files = [
-                    f for f in list_files if not str(f).lower().endswith(".parts")
-                ]
+                if not transfer_results:
+                    logger.info(f"目标目录 {target_dir} 没有文件整理成功，跳过刮削和刷新")
+                    continue
                 
-                logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
-                unique_items = {}
-                total_files = len(list_files)
+                # 按实际的目标目录（transferinfo.target_diritem.path）重新分组
+                actual_dir_groups = {}
+                for transferinfo, mediainfo, file_meta in transfer_results:
+                    actual_dir = str(transferinfo.target_diritem.path).rstrip('/') + '/'
+                    if actual_dir not in actual_dir_groups:
+                        actual_dir_groups[actual_dir] = []
+                    actual_dir_groups[actual_dir].append((transferinfo, mediainfo, file_meta))
                 
-                # 批量获取文件状态
-                file_paths = [str(f) for f in list_files]
-                file_statuses = self._get_all_file_statuses(file_paths)
-                
-                # 遍历目录下所有文件
-                for file_idx, file_path in enumerate(list_files, start=1):
+                # 对每个实际目录执行刮削和刷新
+                for actual_dir, dir_transfer_results in actual_dir_groups.items():
                     # 检查是否需要停止
                     if self._check_stop_flag():
-                        logger.info("检测到停止标志，停止文件处理")
+                        logger.info("检测到停止标志，停止刮削和刷新")
                         break
                     
-                    file_path_str = str(file_path)
-                    file_status = file_statuses.get(file_path_str)
+                    # 步骤2：刮削该目录
+                    if self._scrape:
+                        scrape_status = self._get_scrape_status(actual_dir)
+                        if not scrape_status or scrape_status.get("status") != "completed":
+                            logger.info(f"开始刮削目标目录: {actual_dir}")
+                            self._scrape_target_dir(actual_dir, dir_transfer_results)
+                        else:
+                            logger.info(f"目标目录 {actual_dir} 已刮削过，跳过")
                     
-                    # # 跳过已完成的文件
-                    # if file_status and file_status.get("status") == "completed":
-                    #     logger.debug(f"文件 {file_path} 已处理完成，跳过")
-                    #     continue
-                    
-                    logger.info(
-                        f"开始处理文件({file_idx}/{total_files}) ({file_path.stat().st_size / 2**30:.2f} GiB): {file_path}"
-                    )
-                    
-                    # 保存文件处理进度（用于状态显示）
-                    self.save_data(key="transfer_progress", value={
-                        "status": "processing_file",
-                        "dir_idx": dir_idx,
-                        "total_dirs": total_dirs,
-                        "current_dir": mon_path,
-                        "file_idx": file_idx,
-                        "total_files": total_files,
-                        "current_file": file_path_str,
-                        "file_size": file_path.stat().st_size
-                    })
-                    
-                    # 初始化或更新文件状态为处理中
-                    if not file_status:
-                        self._init_file_status(file_path_str)
-                    self._update_file_status(file_path_str, "processing")
-                    
-                    try:
-                        transfer_result = self.__handle_file(
-                            event_path=file_path_str, mon_path=mon_path
-                        )
-                        # 如果返回值是 None，则跳过
-                        if transfer_result is None:
-                            logger.debug(f"文件 {file_path} 不用刮削")
-                            self._update_file_status(file_path_str, "completed")
-                            continue
-
-                        transferinfo, mediainfo, file_meta = transfer_result
-                        unique_key = Path(transferinfo.target_diritem.path)
-                        # 统一路径格式，确保末尾有 /
-                        scrape_path = str(unique_key).rstrip('/') + '/'
-
-                        # 初始化刮削状态
-                        self._init_scrape_status(scrape_path)
-
-                        # 存储不重复的项
-                        if unique_key not in unique_items:
-                            unique_items[unique_key] = (transferinfo, mediainfo, file_meta)
-                        
-                        # 标记文件为已完成
-                        self._update_file_status(
-                            file_path_str,
-                            "completed",
-                            target_path=str(transferinfo.target_diritem.path),
-                            transfer_type=self._transfer_type
-                        )
-                    except Exception as e:
-                        logger.error(f"处理文件 {file_path} 失败: {e}")
-                        self._update_file_status(
-                            file_path_str,
-                            "failed",
-                            error_message=str(e)
-                        )
-
-                # 批量处理刮削
-                if self._scrape and unique_items:
                     # 检查是否需要停止
                     if self._check_stop_flag():
-                        logger.info("检测到停止标志，跳过刮削处理")
-                    else:
-                        # 过滤出需要刮削的项目（状态为 pending）
-                        items_to_scrape = []
-                        for unique_key, item in unique_items.items():
-                            scrape_path = str(unique_key)
-                            scrape_status = self._get_scrape_status(scrape_path)
-                            if not scrape_status or scrape_status.get("status") != "completed":
-                                items_to_scrape.append(item)
-                        
-                        if items_to_scrape:
-                            logger.info(f"开始处理刮削，共 {len(items_to_scrape)} 个目录需要刮削")
-                            self._batch_scrape(items_to_scrape)
-
-                # 批量处理媒体库刷新
-                if self._refresh and unique_items:
-                    # 检查是否需要停止
-                    if self._check_stop_flag():
-                        logger.info("检测到停止标志，跳过媒体库刷新")
-                    else:
-                        self._batch_refresh_media(unique_items.values())
-                elif self._refresh_modified and unique_items:
-                    # 检查是否需要停止
-                    if self._check_stop_flag():
-                        logger.info("检测到停止标志，跳过媒体库刷新")
-                    else:
-                        self._batch_refresh_media_modified(unique_items.values())
+                        logger.info("检测到停止标志，停止媒体库刷新")
+                        break
+                    
+                    # 步骤3：通知媒体库刷新该目录
+                    if self._refresh:
+                        logger.info(f"开始通知媒体库刷新: {actual_dir}")
+                        self._refresh_target_dir(dir_transfer_results)
+                    elif self._refresh_modified:
+                        logger.info(f"开始通知媒体库刷新(修改版): {actual_dir}")
+                        self._refresh_target_dir_modified(dir_transfer_results)
 
             # 检查是否因为停止标志而停止
             if self._check_stop_flag():
                 logger.info("检测到停止标志，停止插件运行")
                 self.__update_plugin_state("stopped")
             else:
-                logger.info("目录内所有文件整理完成！")
+                logger.info("所有目标目录处理完成！")
                 self.__update_plugin_state("finished")
 
         except Exception as e:
@@ -1123,6 +1050,254 @@ class autoTransfer(_PluginBase):
             self._clear_stop_flag()
             # 释放文件锁
             self._release_lock()
+    
+    def _scan_and_group_files(self):
+        """
+        扫描所有目录，按目标目录分组
+        :return: 按目标目录分组的文件列表 {target_dir: [(file_path, mon_path), ...]}
+        """
+        target_dir_groups = {}
+        
+        # 遍历所有监控目录
+        for mon_path in self._dirconf.keys():
+            logger.info(f"扫描监控目录: {mon_path}")
+            
+            # 获取文件列表
+            list_files = SystemUtils.list_files(
+                directory=Path(mon_path),
+                extensions=settings.RMT_MEDIAEXT,
+                min_filesize=int(self._size),
+                recursive=True,
+            )
+            
+            # 去除 .parts 文件
+            list_files = [
+                f for f in list_files if not str(f).lower().endswith(".parts")
+            ]
+            
+            logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
+            
+            # 对每个文件进行预判，获取目标目录
+            for file_path in list_files:
+                file_path_str = str(file_path)
+                file_size = file_path.stat().st_size
+                
+                try:
+                    # 获取文件元数据
+                    file_meta = self._get_file_meta(file_path, mon_path)
+                    if not file_meta:
+                        continue
+                    
+                    # 查询转移配置
+                    target, transfer_type = self._get_transfer_config(mon_path)
+                    if not target:
+                        continue
+                    
+                    # 获取文件项
+                    file_item = self._get_file_item(file_path)
+                    if not file_item:
+                        continue
+                    
+                    # 识别媒体信息
+                    mediainfo = self._get_media_info(file_item, file_meta, transfer_type)
+                    if not mediainfo:
+                        continue
+                    
+                    # 获取目标目录
+                    target_dir = self._get_target_dir(mediainfo, mon_path, target, transfer_type)
+                    if not target_dir:
+                        continue
+                    
+                    # 统一路径格式
+                    target_dir_path = str(target_dir.library_path).rstrip('/') + '/'
+                    
+                    # 按目标目录分组
+                    if target_dir_path not in target_dir_groups:
+                        target_dir_groups[target_dir_path] = []
+                    
+                    target_dir_groups[target_dir_path].append({
+                        'file_path': file_path_str,
+                        'mon_path': mon_path,
+                        'file_meta': file_meta,
+                        'mediainfo': mediainfo,
+                        'file_item': file_item,
+                        'target_dir': target_dir,
+                        'transfer_type': transfer_type,
+                        'file_size': file_size
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"预判文件 {file_path_str} 的目标目录失败: {e}")
+                    continue
+        
+        return target_dir_groups
+    
+    def _process_files_for_target_dir(self, target_dir, file_list):
+        """
+        整理目标目录下的所有文件
+        :param target_dir: 目标目录
+        :param file_list: 文件列表
+        :return: 整理成功的文件信息列表 [(transferinfo, mediainfo, file_meta), ...]
+        """
+        transfer_results = []
+        total_files = len(file_list)
+        
+        for file_idx, file_info in enumerate(file_list, start=1):
+            # 检查是否需要停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止文件处理")
+                break
+            
+            file_path_str = file_info['file_path']
+            
+            logger.info(
+                f"开始处理文件({file_idx}/{total_files}) ({file_info['file_size'] / 2**30:.2f} GiB): {file_path_str}"
+            )
+            
+            # 保存文件处理进度（用于状态显示）
+            self.save_data(key="transfer_progress", value={
+                "status": "processing_file",
+                "dir_idx": 0,
+                "total_dirs": 0,
+                "current_dir": target_dir,
+                "file_idx": file_idx,
+                "total_files": total_files,
+                "current_file": file_path_str,
+                "file_size": file_info['file_size']
+            })
+            
+            # 初始化文件状态
+            self._init_file_status(file_path_str)
+            self._update_file_status(file_path_str, "processing")
+            
+            try:
+                # 处理下载器限速
+                self._handle_downloader_speed_limit(file_info['file_item'], file_info['target_dir'])
+                
+                # 转移文件
+                transferinfo = self._transfer_file(
+                    file_info['file_item'],
+                    file_info['file_meta'],
+                    file_info['mediainfo'],
+                    file_info['target_dir'],
+                    None
+                )
+                
+                # 恢复下载器限速
+                self._recover_downloader_speed_limit()
+                
+                if not transferinfo:
+                    logger.error("文件转移模块运行失败")
+                    self._update_file_status(file_path_str, "failed", error_message="文件转移模块运行失败")
+                    continue
+                
+                # 处理转移失败
+                if not transferinfo.success:
+                    self._handle_transfer_failure(
+                        file_info['file_item'],
+                        Path(file_path_str),
+                        file_info['transfer_type'],
+                        file_info['file_meta'],
+                        file_info['mediainfo'],
+                        transferinfo
+                    )
+                    self._update_file_status(file_path_str, "failed", error_message=transferinfo.message)
+                    continue
+                
+                # 处理转移成功
+                self._handle_transfer_success(
+                    file_info['file_item'],
+                    Path(file_path_str),
+                    file_info['transfer_type'],
+                    file_info['file_meta'],
+                    file_info['mediainfo'],
+                    transferinfo,
+                    file_info['mon_path']
+                )
+                
+                # 标记文件为已完成
+                self._update_file_status(
+                    file_path_str,
+                    "completed",
+                    target_path=str(transferinfo.target_diritem.path),
+                    transfer_type=file_info['transfer_type']
+                )
+                
+                # 添加到结果列表
+                transfer_results.append((transferinfo, file_info['mediainfo'], file_info['file_meta']))
+                
+            except Exception as e:
+                logger.error(f"处理文件 {file_path_str} 失败: {e}")
+                self._update_file_status(file_path_str, "failed", error_message=str(e))
+        
+        logger.info(f"目标目录 {target_dir} 整理完成，成功 {len(transfer_results)}/{total_files} 个文件")
+        return transfer_results
+    
+    def _scrape_target_dir(self, target_dir, transfer_results):
+        """
+        刮削目标目录
+        :param target_dir: 目标目录
+        :param transfer_results: 整理成功的文件信息列表
+        """
+        try:
+            # 更新刮削状态为处理中
+            self._update_scrape_status(target_dir, "processing")
+            
+            # 使用第一个文件的信息进行刮削（因为同一目录的刮削是一样的）
+            transferinfo, mediainfo, file_meta = transfer_results[0]
+            
+            logger.info(f"开始刮削目录: {target_dir}")
+            
+            # 发送刮削请求
+            self.mediaChain.scrape_metadata(
+                fileitem=transferinfo.target_diritem,
+                meta=file_meta,
+                mediainfo=mediainfo,
+            )
+            
+            # 标记刮削为完成
+            self._update_scrape_status(target_dir, "completed")
+            logger.info(f"刮削目录成功: {target_dir}")
+            
+        except Exception as e:
+            error_msg = f"刮削目录失败: {target_dir}, 错误信息: {e}"
+            logger.warning(error_msg)
+            self._update_scrape_status(target_dir, "completed", error_message=error_msg)
+    
+    def _refresh_target_dir(self, transfer_results):
+        """
+        通知媒体库刷新目标目录
+        :param transfer_results: 整理成功的文件信息列表
+        """
+        try:
+            # 使用第一个文件的信息进行刷新
+            transferinfo, mediainfo, file_meta = transfer_results[0]
+            
+            self.eventmanager.send_event(
+                EventType.TransferComplete,
+                {
+                    "meta": file_meta,
+                    "mediainfo": mediainfo,
+                    "transferinfo": transferinfo,
+                },
+            )
+            logger.info(f"成功通知媒体库刷新: {transferinfo.target_diritem.path}")
+        except Exception as e:
+            logger.error(f"通知媒体库刷新失败: {transferinfo.target_diritem.path}, 错误信息: {e}")
+    
+    def _refresh_target_dir_modified(self, transfer_results):
+        """
+        通知媒体库刷新目标目录（修改版）
+        :param transfer_results: 整理成功的文件信息列表
+        """
+        try:
+            # 使用第一个文件的信息进行刷新
+            transferinfo, mediainfo = transfer_results[0][:2]
+            
+            self._refresh_lib_modified(transferinfo, mediainfo)
+            logger.info(f"成功通知媒体库刷新: {transferinfo.target_diritem.path}")
+        except Exception as e:
+            logger.error(f"通知媒体库刷新失败: {transferinfo.target_diritem.path}, 错误信息: {e}")
             
     def _batch_scrape(self, items):
         """
