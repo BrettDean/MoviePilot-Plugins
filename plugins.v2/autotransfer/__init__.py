@@ -597,6 +597,24 @@ class autoTransfer(_PluginBase):
         """
         self.del_data(key="stop_flag")
 
+    def _clear_dir_history(self, target_dir: str, file_list: List[Dict]):
+        """
+        清除目标目录的历史记录
+        :param target_dir: 目标目录
+        :param file_list: 文件列表
+        """
+        # 清除该目录下所有文件的状态记录
+        for file_info in file_list:
+            file_path = file_info['file_path']
+            file_key = self._get_file_key(file_path)
+            self.del_data(key=file_key)
+            logger.debug(f"已清除文件历史记录: {file_path}")
+        
+        # 清除该目录的刮削状态记录
+        scrape_key = self._get_scrape_key(target_dir)
+        self.del_data(key=scrape_key)
+        logger.debug(f"已清除刮削历史记录: {target_dir}")
+
     def __runResetPlunindata(self):
         """
         重置插件数据
@@ -980,6 +998,10 @@ class autoTransfer(_PluginBase):
                 
                 logger.info(f"开始处理目标目录({dir_idx}/{total_target_dirs}): {target_dir} ...")
                 
+                # 清除该目录的历史记录，让文件可以重新被处理
+                logger.info(f"清除目标目录 {target_dir} 的历史记录...")
+                self._clear_dir_history(target_dir, file_list)
+                
                 # 保存目录处理进度（用于状态显示）
                 self.save_data(key="transfer_progress", value={
                     "status": "processing_dir",
@@ -1010,10 +1032,19 @@ class autoTransfer(_PluginBase):
                         logger.info("检测到停止标志，停止刮削和刷新")
                         break
                     
+                    # 清除实际目录的刮削历史记录
+                    logger.debug(f"清除实际目录 {actual_dir} 的刮削历史记录...")
+                    scrape_key = self._get_scrape_key(actual_dir)
+                    self.del_data(key=scrape_key)
+                    
                     # 步骤2：刮削该目录
                     if self._scrape:
                         scrape_status = self._get_scrape_status(actual_dir)
                         if not scrape_status or scrape_status.get("status") != "completed":
+                            # 再次检查停止标志，确保在发送刮削请求前没有新的停止请求
+                            if self._check_stop_flag():
+                                logger.info("检测到停止标志，跳过刮削")
+                                break
                             logger.info(f"开始刮削目标目录: {actual_dir}")
                             self._scrape_target_dir(actual_dir, dir_transfer_results)
                         else:
@@ -1060,6 +1091,11 @@ class autoTransfer(_PluginBase):
         
         # 遍历所有监控目录
         for mon_path in self._dirconf.keys():
+            # 检查是否需要停止
+            if self._check_stop_flag():
+                logger.info("检测到停止标志，停止扫描")
+                break
+            
             logger.info(f"扫描监控目录: {mon_path}")
             
             # 获取文件列表
@@ -1079,6 +1115,11 @@ class autoTransfer(_PluginBase):
             
             # 对每个文件进行预判，获取目标目录
             for file_path in list_files:
+                # 检查是否需要停止
+                if self._check_stop_flag():
+                    logger.info("检测到停止标志，停止文件预判")
+                    break
+                
                 file_path_str = str(file_path)
                 file_size = file_path.stat().st_size
                 
