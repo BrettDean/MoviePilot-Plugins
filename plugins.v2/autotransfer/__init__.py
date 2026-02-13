@@ -967,7 +967,7 @@ class autoTransfer(_PluginBase):
                 })
                 
                 # 步骤1：整理该目录下的所有文件
-                transfer_results = self._process_files_for_target_dir(target_dir, file_list)
+                transfer_results = self._process_files_for_target_dir(target_dir, file_list, dir_idx, total_target_dirs)
                 
                 if not transfer_results:
                     logger.info(f"目标目录 {target_dir} 没有文件整理成功，跳过刮削和刷新")
@@ -1098,11 +1098,13 @@ class autoTransfer(_PluginBase):
         
         return target_dir_groups
     
-    def _process_files_for_target_dir(self, target_dir, file_list):
+    def _process_files_for_target_dir(self, target_dir, file_list, dir_idx, total_dirs):
         """
         整理目标目录下的所有文件
         :param target_dir: 目标目录
         :param file_list: 文件列表
+        :param dir_idx: 当前目录索引
+        :param total_dirs: 总目录数
         :return: 整理成功的文件信息列表 [(transferinfo, mediainfo, file_meta), ...]
         """
         transfer_results = []
@@ -1118,8 +1120,8 @@ class autoTransfer(_PluginBase):
             # 保存文件处理进度（用于状态显示）
             self.save_data(key="transfer_progress", value={
                 "status": "processing_file",
-                "dir_idx": 0,
-                "total_dirs": 0,
+                "dir_idx": dir_idx,
+                "total_dirs": total_dirs,
                 "current_dir": target_dir,
                 "file_idx": file_idx,
                 "total_files": total_files,
