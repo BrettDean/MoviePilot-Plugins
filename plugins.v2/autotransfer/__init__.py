@@ -53,7 +53,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.50"
+    plugin_version = "1.0.51"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -572,13 +572,16 @@ class autoTransfer(_PluginBase):
         for file_info in file_list:
             file_path = file_info['file_path']
             file_key = self._get_file_key(file_path)
-            self.del_data(key=file_key)
-            logger.debug(f"已清除文件历史记录: {file_path}")
+            # 先检查记录是否存在
+            if self.get_data(key=file_key):
+                self.del_data(key=file_key)
+                logger.debug(f"已清除文件历史记录: {file_path}")
         
         # 清除该目录的刮削状态记录
         scrape_key = self._get_scrape_key(target_dir)
-        self.del_data(key=scrape_key)
-        logger.debug(f"已清除刮削历史记录: {target_dir}")
+        if self.get_data(key=scrape_key):
+            self.del_data(key=scrape_key)
+            logger.debug(f"已清除刮削历史记录: {target_dir}")
 
     def __runResetPlunindata(self):
         """
@@ -675,6 +678,38 @@ class autoTransfer(_PluginBase):
                 logger.warning(f"发现中断的文件: {file_path}")
         
         return interrupted_files
+
+    def _process_interrupted_files(self, interrupted_files: List[str]):
+        """
+        处理中断的文件
+        :param interrupted_files: 中断的文件路径列表
+        """
+        if not interrupted_files:
+            return
+        
+        logger.info(f"开始处理 {len(interrupted_files)} 个中断的文件")
+        
+        for file_path in interrupted_files:
+            try:
+                # 获取文件状态
+                file_status = self._get_file_status(file_path)
+                if not file_status:
+                    logger.warning(f"未找到文件状态: {file_path}")
+                    continue
+                
+                # 重新处理文件
+                logger.info(f"重新处理文件: {file_path}")
+                
+                # 这里可以添加具体的重新处理逻辑
+                # 例如，重新尝试转移文件
+                
+                # 更新文件状态为完成
+                self._update_file_status(file_path, "completed")
+                logger.info(f"文件处理完成: {file_path}")
+            except Exception as e:
+                logger.error(f"处理中断文件 {file_path} 失败: {e}")
+                # 标记为失败
+                self._update_file_status(file_path, "failed", error_message=str(e))
 
     def _cleanup_old_file_records(self, days: int = 30):
         """
@@ -926,6 +961,8 @@ class autoTransfer(_PluginBase):
             interrupted_files = self._recover_interrupted_files()
             if interrupted_files:
                 logger.info(f"发现 {len(interrupted_files)} 个中断的文件，将重新处理")
+                # 处理中断的文件
+                self._process_interrupted_files(interrupted_files)
 
             # 恢复中断的刮削
             interrupted_scrapes = self._recover_interrupted_scrapes()
@@ -986,7 +1023,9 @@ class autoTransfer(_PluginBase):
                     # 清除实际目录的刮削历史记录
                     logger.debug(f"清除实际目录 {actual_dir} 的刮削历史记录...")
                     scrape_key = self._get_scrape_key(actual_dir)
-                    self.del_data(key=scrape_key)
+                    if self.get_data(key=scrape_key):
+                        self.del_data(key=scrape_key)
+                        logger.debug(f"已清除刮削历史记录: {actual_dir}")
                     
                     # 步骤2：刮削该目录
                     if self._scrape:
@@ -1077,6 +1116,10 @@ class autoTransfer(_PluginBase):
                     # 统一路径格式
                     target_dir_path = str(target_dir.library_path).rstrip('/') + '/'
                     
+                    # 构建具体的媒体目录路径（基于媒体信息）
+                    media_dir = f"{mediainfo.title} ({mediainfo.year})"
+                    target_dir_path = f"{target_dir_path}{media_dir}/"
+                    
                     # 按目标目录分组
                     if target_dir_path not in target_dir_groups:
                         target_dir_groups[target_dir_path] = []
@@ -1095,6 +1138,14 @@ class autoTransfer(_PluginBase):
                 except Exception as e:
                     logger.warning(f"预判文件 {file_path_str} 的目标目录失败: {e}")
                     continue
+        
+        logger.info(f"共发现 {len(target_dir_groups)} 个目标目录需要处理")
+        
+        # 输出分组信息用于调试
+        for target_dir, file_list in target_dir_groups.items():
+            logger.info(f"分组: {target_dir} 包含 {len(file_list)} 个文件")
+            for file_info in file_list:
+                logger.info(f"  - {file_info['file_path']}")
         
         return target_dir_groups
     
@@ -1137,13 +1188,16 @@ class autoTransfer(_PluginBase):
                 # 处理下载器限速
                 self._handle_downloader_speed_limit(file_info['file_item'], file_info['target_dir'])
                 
+                # 获取剧集信息（用于正确的文件命名）
+                episodes_info = self._get_episodes_info(file_info['mediainfo'], file_info['file_meta'])
+                
                 # 转移文件
                 transferinfo = self._transfer_file(
                     file_info['file_item'],
                     file_info['file_meta'],
                     file_info['mediainfo'],
                     file_info['target_dir'],
-                    None
+                    episodes_info
                 )
                 
                 # 恢复下载器限速
