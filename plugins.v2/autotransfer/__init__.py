@@ -700,16 +700,121 @@ class autoTransfer(_PluginBase):
                 # 重新处理文件
                 logger.info(f"重新处理文件: {file_path}")
                 
-                # 这里可以添加具体的重新处理逻辑
-                # 例如，重新尝试转移文件
+                # 初始化文件状态
+                self._init_file_status(file_path)
+                self._update_file_status(file_path, "processing")
                 
-                # 更新文件状态为完成
-                self._update_file_status(file_path, "completed")
-                logger.info(f"文件处理完成: {file_path}")
+                # 尝试重新转移文件
+                try:
+                    # 重新获取文件元数据和媒体信息
+                    file_info = {
+                        'file_path': file_path,
+                        'mon_path': os.path.dirname(file_path),
+                    }
+                    
+                    # 重新获取文件元数据
+                    file_meta = self._get_file_meta(Path(file_path), file_info['mon_path'])
+                    if not file_meta:
+                        logger.error(f"重新获取文件元数据失败: {file_path}")
+                        self._update_file_status(file_path, "failed", error_message="重新获取文件元数据失败")
+                        continue
+                    
+                    # 获取文件项
+                    file_item = self._get_file_item(Path(file_path))
+                    if not file_item:
+                        logger.error(f"重新获取文件项失败: {file_path}")
+                        self._update_file_status(file_path, "failed", error_message="重新获取文件项失败")
+                        continue
+                    
+                    # 重新识别媒体信息
+                    mediainfo = self._get_media_info(file_item, file_meta, "move")
+                    if not mediainfo:
+                        logger.error(f"重新识别媒体信息失败: {file_path}")
+                        self._update_file_status(file_path, "failed", error_message="重新识别媒体信息失败")
+                        continue
+                    
+                    # 获取目标目录
+                    target, transfer_type = self._get_transfer_config(file_info['mon_path'])
+                    if not target:
+                        logger.error(f"未找到转移配置: {file_path}")
+                        self._update_file_status(file_path, "failed", error_message="未找到转移配置")
+                        continue
+                    
+                    target_dir = self._get_target_dir(mediainfo, file_info['mon_path'], target, transfer_type)
+                    if not target_dir:
+                        logger.error(f"未找到目标目录: {file_path}")
+                        self._update_file_status(file_path, "failed", error_message="未找到目标目录")
+                        continue
+                    
+                    # 处理下载器限速（和正常流程一致）
+                    self._handle_downloader_speed_limit(file_item, target_dir)
+                    
+                    # 获取剧集信息
+                    episodes_info = self._get_episodes_info(mediainfo, file_meta)
+                    
+                    # 重新尝试转移文件
+                    logger.info(f"尝试重新转移文件: {file_path}")
+                    transferinfo = self._transfer_file(
+                        file_item,
+                        file_meta,
+                        mediainfo,
+                        target_dir,
+                        episodes_info
+                    )
+                    
+                    # 恢复下载器限速（和正常流程一致）
+                    self._recover_downloader_speed_limit()
+                    
+                    # 处理转移失败（和正常流程一致）
+                    if not transferinfo:
+                        logger.error("文件转移模块运行失败")
+                        self._update_file_status(file_path, "failed", error_message="文件转移模块运行失败")
+                        continue
+                    
+                    if not transferinfo.success:
+                        self._handle_transfer_failure(
+                            file_item,
+                            Path(file_path),
+                            transfer_type,
+                            file_meta,
+                            mediainfo,
+                            transferinfo
+                        )
+                        self._update_file_status(file_path, "failed", error_message=transferinfo.message)
+                        continue
+                    
+                    # 处理转移成功（和正常流程一致）
+                    self._handle_transfer_success(
+                        file_item,
+                        Path(file_path),
+                        transfer_type,
+                        file_meta,
+                        mediainfo,
+                        transferinfo,
+                        file_info['mon_path']
+                    )
+                    
+                    # 标记文件为已完成
+                    self._update_file_status(
+                        file_path,
+                        "completed",
+                        target_path=str(transferinfo.target_diritem.path),
+                        transfer_type=transfer_type
+                    )
+                    
+                    logger.info(f"文件处理完成: {file_path}")
+                    
+                except Exception as e:
+                    logger.error(f"重新处理文件失败: {file_path}, 错误: {e}")
+                    self._update_file_status(file_path, "failed", error_message=str(e))
+                    # 恢复下载器限速
+                    self._recover_downloader_speed_limit()
             except Exception as e:
                 logger.error(f"处理中断文件 {file_path} 失败: {e}")
                 # 标记为失败
                 self._update_file_status(file_path, "failed", error_message=str(e))
+                # 恢复下载器限速
+                self._recover_downloader_speed_limit()
 
     def _cleanup_old_file_records(self, days: int = 30):
         """
