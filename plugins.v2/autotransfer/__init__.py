@@ -53,7 +53,7 @@ class autoTransfer(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/BrettDean/MoviePilot-Plugins/main/icons/autotransfer.png"
     # 插件版本
-    plugin_version = "1.0.51"
+    plugin_version = "1.0.52"
     # 插件作者
     plugin_author = "Dean"
     # 作者主页
@@ -1141,13 +1141,7 @@ class autoTransfer(_PluginBase):
                         else:
                             logger.info(f"目标目录 {actual_dir} 已刮削过，跳过")
                     
-                    # 步骤3：通知媒体库刷新该目录
-                    if self._refresh:
-                        logger.info(f"开始通知媒体库刷新: {actual_dir}")
-                        self._refresh_target_dir(dir_transfer_results)
-                    elif self._refresh_modified:
-                        logger.info(f"开始通知媒体库刷新(修改版): {actual_dir}")
-                        self._refresh_target_dir_modified(dir_transfer_results)
+                    # 步骤3：通知媒体库刷新该目录（已移至异步刮削完成后执行）
 
             logger.info("所有目标目录处理完成！")
             self.__update_plugin_state("finished")
@@ -1355,9 +1349,9 @@ class autoTransfer(_PluginBase):
         logger.info(f"目标目录 {target_dir} 整理完成，成功 {len(transfer_results)}/{total_files} 个文件")
         return transfer_results
     
-    def _scrape_target_dir(self, target_dir, transfer_results):
+    def _scrape_target_dir_async(self, target_dir, transfer_results):
         """
-        刮削目标目录
+        异步刮削目标目录
         :param target_dir: 目标目录
         :param transfer_results: 整理成功的文件信息列表
         """
@@ -1381,10 +1375,42 @@ class autoTransfer(_PluginBase):
             self._update_scrape_status(target_dir, "completed")
             logger.info(f"刮削目录成功: {target_dir}")
             
+            # 刮削完成后执行刷新操作
+            logger.info(f"开始通知媒体库刷新: {target_dir}")
+            if self._refresh:
+                self._refresh_target_dir(transfer_results)
+            elif self._refresh_modified:
+                self._refresh_target_dir_modified(transfer_results)
+            
         except Exception as e:
             error_msg = f"刮削目录失败: {target_dir}, 错误信息: {e}"
             logger.warning(error_msg)
             self._update_scrape_status(target_dir, "completed", error_message=error_msg)
+            
+            # 即使刮削失败也尝试刷新
+            try:
+                logger.info(f"开始通知媒体库刷新: {target_dir}")
+                if self._refresh:
+                    self._refresh_target_dir(transfer_results)
+                elif self._refresh_modified:
+                    self._refresh_target_dir_modified(transfer_results)
+            except Exception as refresh_error:
+                logger.error(f"通知媒体库刷新失败: {target_dir}, 错误信息: {refresh_error}")
+    
+    def _scrape_target_dir(self, target_dir, transfer_results):
+        """
+        刮削目标目录（异步执行）
+        :param target_dir: 目标目录
+        :param transfer_results: 整理成功的文件信息列表
+        """
+        # 创建并启动线程执行刮削操作
+        scrape_thread = threading.Thread(
+            target=self._scrape_target_dir_async,
+            args=(target_dir, transfer_results),
+            daemon=True
+        )
+        scrape_thread.start()
+        logger.info(f"已启动异步刮削线程: {target_dir}")
     
     def _refresh_target_dir(self, transfer_results):
         """
