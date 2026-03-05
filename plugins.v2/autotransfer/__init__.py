@@ -1902,21 +1902,20 @@ class autoTransfer(_PluginBase):
         ]
 
     @eventmanager.register(EventType.PluginAction)
-    def handle_plugin_action(self, event: Event = None):
+    def handle_start_autoTransfer(self, event: Event = None):
         """
-        处理插件动作事件
+        处理立即运行命令
         :param event: 事件对象
         """
+        if not self._enabled:
+            logger.info("插件未启用，忽略立即运行命令")
+            return
         if event:
             event_data = event.event_data
-            if not event_data:
+            if not event_data or event_data.get("action") != "start_autoTransfer":
                 return
-            
-            action = event_data.get("action")
-            
-            if action == "start_autoTransfer":
-                logger.info("收到立即运行一次命令")
-                self._start_autoTransfer()
+        logger.info("收到立即运行一次命令")
+        self._start_autoTransfer()
 
     def _start_autoTransfer(self):
         """
@@ -1924,6 +1923,7 @@ class autoTransfer(_PluginBase):
         """
         if not self._scheduler:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+            logger.info("创建新的调度器")
         
         logger.info("立即运行一次")
         self._scheduler.add_job(
@@ -1937,7 +1937,9 @@ class autoTransfer(_PluginBase):
         # 启动定时服务
         if self._scheduler.get_jobs():
             self._scheduler.print_jobs()
-            self._scheduler.start()
+            if not self._scheduler.running:
+                self._scheduler.start()
+                logger.info("启动调度器")
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
