@@ -2784,7 +2784,7 @@ class autoTransfer(_PluginBase):
                                                 "props": {
                                                     "model": "enabled",
                                                     "label": "启用插件",
-                                                    "hint": "开启后将按照执行周期定期运行",
+                                                    "hint": "开启后将按照执行周期定期运行\n【注意:插件正在运行时，切勿`修改配置并保存`】",
                                                     "persistent-hint": True,
                                                 },
                                             }
