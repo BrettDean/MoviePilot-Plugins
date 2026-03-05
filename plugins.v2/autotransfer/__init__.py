@@ -1898,6 +1898,13 @@ class autoTransfer(_PluginBase):
                 "desc": "立即运行一次autoTransfer",
                 "category": "",
                 "data": {"action": "start_autoTransfer"},
+            },
+            {
+                "cmd": "/autotransfer_status",
+                "event": EventType.PluginAction,
+                "desc": "获取autoTransfer运行状态",
+                "category": "",
+                "data": {"action": "autotransfer_status"},
             }
         ]
 
@@ -1907,15 +1914,55 @@ class autoTransfer(_PluginBase):
         处理立即运行命令
         :param event: 事件对象
         """
+        logger.debug(f"handle_start_autoTransfer 被调用，插件启用状态: {self._enabled}")
         if not self._enabled:
             logger.info("插件未启用，忽略立即运行命令")
             return
         if event:
             event_data = event.event_data
+            logger.debug(f"事件数据: {event_data}")
             if not event_data or event_data.get("action") != "start_autoTransfer":
+                logger.debug(f"函数handle_start_autoTransfer: action 不匹配，期望: start_autoTransfer, 实际: {event_data.get('action') if event_data else None}")
                 return
-        logger.info("收到立即运行一次命令")
+        logger.info("收到立即运行一次命令/start_autoTransfer")
+
+        # 发送开始运行通知
+        if self._notify:
+            self.post_message(
+                mtype=NotificationType.Plugin,
+                title="【AutoTransfer】",
+                text="开始执行整理任务"
+            )
+
         self._start_autoTransfer()
+
+    @eventmanager.register(EventType.PluginAction)
+    def handle_autotransfer_status(self, event: Event = None):
+        """
+        处理获取运行状态命令
+        :param event: 事件对象
+        """
+        logger.debug(f"handle_autotransfer_status 被调用，插件启用状态: {self._enabled}")
+        if not self._enabled:
+            logger.info("插件未启用，忽略获取运行状态命令")
+            return
+        if event:
+            event_data = event.event_data
+            logger.debug(f"事件数据: {event_data}")
+            if not event_data or event_data.get("action") != "autotransfer_status":
+                logger.debug(f"函数handle_autotransfer_status: action 不匹配，期望: autotransfer_status, 实际: {event_data.get('action') if event_data else None}")
+                return
+        
+        logger.info("收到获取运行状态命令/autotransfer_status")
+        status_label, alert_type, alert_variant = self.__get_alert_props()
+
+        # 发送状态消息
+        if self._notify:
+            self.post_message(
+                mtype=NotificationType.Plugin,
+                title="【AutoTransfer运行状态】",
+                text=status_label
+            )
 
     def _start_autoTransfer(self):
         """
