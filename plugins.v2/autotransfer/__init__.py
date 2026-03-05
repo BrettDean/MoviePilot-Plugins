@@ -1215,6 +1215,10 @@ class autoTransfer(_PluginBase):
                     # 统一路径格式
                     target_dir_path = str(target_dir.library_path).rstrip('/') + '/'
                     
+                    # 如果需要类别目录，且媒体有类别，则添加类别目录
+                    if getattr(target_dir, 'library_category_folder', False) and mediainfo.category:
+                        target_dir_path = f"{target_dir_path}{mediainfo.category}/"
+                    
                     # 构建具体的媒体目录路径（基于媒体信息）
                     media_dir = f"{mediainfo.title} ({mediainfo.year})"
                     target_dir_path = f"{target_dir_path}{media_dir}/"
