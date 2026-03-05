@@ -2701,10 +2701,10 @@ class autoTransfer(_PluginBase):
                     status_label += f"\n工作状态：正在处理目录"
                     status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
                 elif progress_data.get("status") == "processing_file":
-                    status_label += f"\n工作状态：正在处理文件"
+                    status_label += f"\n工作状态：正在整理文件"
                     status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
                     file_size = progress_data.get('file_size', 0) / 2**30
-                    status_label += f"\n正在处理文件({progress_data.get('file_idx')}/{progress_data.get('total_files')}) ({file_size:.2f} GiB): {progress_data.get('current_file')}"
+                    status_label += f"\n正在整理文件({progress_data.get('file_idx')}/{progress_data.get('total_files')}) ({file_size:.2f} GiB): {progress_data.get('current_file')}"
             else:
                 status_label += "\n工作状态：初始化配置和准备扫描"
             alert_type = "primary"  # 运行中状态，显示为紫色
