@@ -1161,8 +1161,11 @@ class autoTransfer(_PluginBase):
         :return: 按目标目录分组的文件列表 {target_dir: [(file_path, mon_path), ...]}
         """
         target_dir_groups = {}
+        total_files = 0
+        processed_files = 0
+        all_files = []
         
-        # 遍历所有监控目录
+        # 遍历所有监控目录，先统计总文件数
         for mon_path in self._dirconf.keys():
             logger.info(f"扫描监控目录: {mon_path}")
             
@@ -1173,74 +1176,90 @@ class autoTransfer(_PluginBase):
                 min_filesize=int(self._size),
                 recursive=True,
             )
-            
             # 去除 .parts 文件
             list_files = [
                 f for f in list_files if not str(f).lower().endswith(".parts")
             ]
+            all_files.extend([(mon_path, file_path) for file_path in list_files])
+        
+        total_files = len(all_files)
+        logger.info(f"源目录 {mon_path} 共发现 {total_files} 个待整理文件")
+        
+        # 开始扫描
+        if total_files > 0:
+            logger.info("开始扫描和识别文件...")
+        
+        # 处理每个文件
+        for idx, (mon_path, file_path) in enumerate(all_files, 1):
+            file_path_str = str(file_path)
+            file_size = file_path.stat().st_size
             
-            logger.info(f"源目录 {mon_path} 共发现 {len(list_files)} 个视频待整理")
+            # 更新扫描进度
+            if idx % 5 == 0 or idx == total_files:
+                self.save_data(key="transfer_progress", value={
+                    "status": "scanning",
+                    "current_file": file_path_str,
+                    "file_idx": idx,
+                    "total_files": total_files,
+                    "current_monitor": mon_path
+                })
+                logger.info(f"扫描中 ({idx}/{total_files}): {file_path_str}")
             
-            # 对每个文件进行预判，获取目标目录
-            for file_path in list_files:
-                file_path_str = str(file_path)
-                file_size = file_path.stat().st_size
-                
-                try:
-                    # 获取文件元数据
-                    file_meta = self._get_file_meta(file_path, mon_path)
-                    if not file_meta:
-                        continue
-                    
-                    # 查询转移配置
-                    target, transfer_type = self._get_transfer_config(mon_path)
-                    if not target:
-                        continue
-                    
-                    # 获取文件项
-                    file_item = self._get_file_item(file_path)
-                    if not file_item:
-                        continue
-                    
-                    # 识别媒体信息
-                    mediainfo = self._get_media_info(file_item, file_meta, transfer_type)
-                    if not mediainfo:
-                        continue
-                    
-                    # 获取目标目录
-                    target_dir = self._get_target_dir(mediainfo, mon_path, target, transfer_type)
-                    if not target_dir:
-                        continue
-                    
-                    # 统一路径格式
-                    target_dir_path = str(target_dir.library_path).rstrip('/') + '/'
-                    
-                    # 如果需要类别目录，且媒体有类别，则添加类别目录
-                    if getattr(target_dir, 'library_category_folder', False) and mediainfo.category:
-                        target_dir_path = f"{target_dir_path}{mediainfo.category}/"
-                    
-                    # 构建具体的媒体目录路径（基于媒体信息）
-                    media_dir = f"{mediainfo.title} ({mediainfo.year})"
-                    target_dir_path = f"{target_dir_path}{media_dir}/"
-                    
-                    # 按目标目录分组
-                    if target_dir_path not in target_dir_groups:
-                        target_dir_groups[target_dir_path] = []
-                    
-                    target_dir_groups[target_dir_path].append({
-                        'file_path': file_path_str,
-                        'mon_path': mon_path,
-                        'file_meta': file_meta,
-                        'mediainfo': mediainfo,
-                        'file_item': file_item,
-                        'target_dir': target_dir,
-                        'transfer_type': transfer_type,
-                        'file_size': file_size
-                    })
-                    
-                except Exception as e:
-                    logger.warning(f"预判文件 {file_path_str} 的目标目录失败: {e}")
+            try:
+                # 获取文件元数据
+                file_meta = self._get_file_meta(file_path, mon_path)
+                if not file_meta:
                     continue
+                
+                # 查询转移配置
+                target, transfer_type = self._get_transfer_config(mon_path)
+                if not target:
+                    continue
+                
+                # 获取文件项
+                file_item = self._get_file_item(file_path)
+                if not file_item:
+                    continue
+                
+                # 识别媒体信息
+                mediainfo = self._get_media_info(file_item, file_meta, transfer_type)
+                if not mediainfo:
+                    continue
+                
+                # 获取目标目录
+                target_dir = self._get_target_dir(mediainfo, mon_path, target, transfer_type)
+                if not target_dir:
+                    continue
+                
+                # 统一路径格式
+                target_dir_path = str(target_dir.library_path).rstrip('/') + '/'
+                
+                # 如果需要类别目录，且媒体有类别，则添加类别目录
+                if getattr(target_dir, 'library_category_folder', False) and mediainfo.category:
+                    target_dir_path = f"{target_dir_path}{mediainfo.category}/"
+                
+                # 构建具体的媒体目录路径（基于媒体信息）
+                media_dir = f"{mediainfo.title} ({mediainfo.year})"
+                target_dir_path = f"{target_dir_path}{media_dir}/"
+                
+                # 按目标目录分组
+                if target_dir_path not in target_dir_groups:
+                    target_dir_groups[target_dir_path] = []
+                
+                target_dir_groups[target_dir_path].append({
+                    'file_path': file_path_str,
+                    'mon_path': mon_path,
+                    'file_meta': file_meta,
+                    'mediainfo': mediainfo,
+                    'file_item': file_item,
+                    'target_dir': target_dir,
+                    'transfer_type': transfer_type,
+                    'file_size': file_size
+                })
+                
+            except Exception as e:
+                logger.warning(f"预判文件 {file_path_str} 的目标目录失败: {e}")
+                continue
         
         logger.info(f"共发现 {len(target_dir_groups)} 个目标目录需要处理")
         
@@ -1249,6 +1268,9 @@ class autoTransfer(_PluginBase):
             logger.info(f"分组: {target_dir} 包含 {len(file_list)} 个文件")
             for file_info in file_list:
                 logger.info(f"  - {file_info['file_path']}")
+        
+        # 清除扫描进度
+        self.del_data(key="transfer_progress")
         
         return target_dir_groups
     
@@ -2621,12 +2643,21 @@ class autoTransfer(_PluginBase):
             # 获取进度信息
             progress_data = self.get_data(key="transfer_progress")
             if progress_data:
-                if progress_data.get("status") == "processing_dir":
+                if progress_data.get("status") == "scanning":
+                    status_label += f"\n工作状态：正在扫描文件"
+                    status_label += f"\n扫描进度：{progress_data.get('file_idx', 0)}/{progress_data.get('total_files', 0)}"
+                    status_label += f"\n当前监控目录: {progress_data.get('current_monitor', '')}"
+                    status_label += f"\n当前文件: {progress_data.get('current_file', '')}"
+                elif progress_data.get("status") == "processing_dir":
+                    status_label += f"\n工作状态：正在处理目录"
                     status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
                 elif progress_data.get("status") == "processing_file":
+                    status_label += f"\n工作状态：正在处理文件"
                     status_label += f"\n正在处理目录({progress_data.get('dir_idx')}/{progress_data.get('total_dirs')}): {progress_data.get('current_dir')}"
                     file_size = progress_data.get('file_size', 0) / 2**30
                     status_label += f"\n正在处理文件({progress_data.get('file_idx')}/{progress_data.get('total_files')}) ({file_size:.2f} GiB): {progress_data.get('current_file')}"
+            else:
+                status_label += "\n工作状态：初始化配置和准备扫描"
             alert_type = "primary"  # 运行中状态，显示为紫色
             alert_variant = "filled"  # 填充样式
         elif plugin_state == "finished":
