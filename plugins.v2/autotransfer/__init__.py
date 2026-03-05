@@ -2693,8 +2693,8 @@ class autoTransfer(_PluginBase):
             progress_data = self.get_data(key="transfer_progress")
             if progress_data:
                 if progress_data.get("status") == "scanning":
-                    status_label += f"\n工作状态：正在扫描文件"
-                    status_label += f"\n扫描进度：{progress_data.get('file_idx', 0)}/{progress_data.get('total_files', 0)}"
+                    status_label += f"\n工作状态：正在识别所有文件的媒体信息，并获取最终整理目的地"
+                    status_label += f"\n识别进度：{progress_data.get('file_idx', 0)}/{progress_data.get('total_files', 0)}"
                     status_label += f"\n当前监控目录: {progress_data.get('current_monitor', '')}"
                     status_label += f"\n当前文件: {progress_data.get('current_file', '')}"
                 elif progress_data.get("status") == "processing_dir":
@@ -2706,7 +2706,7 @@ class autoTransfer(_PluginBase):
                     file_size = progress_data.get('file_size', 0) / 2**30
                     status_label += f"\n正在整理文件({progress_data.get('file_idx')}/{progress_data.get('total_files')}) ({file_size:.2f} GiB): {progress_data.get('current_file')}"
             else:
-                status_label += "\n工作状态：初始化配置和准备扫描"
+                status_label += "\n工作状态：递归扫描监控目录，获取需要整理的所有视频文件"
             alert_type = "primary"  # 运行中状态，显示为紫色
             alert_variant = "filled"  # 填充样式
         elif plugin_state == "finished":
